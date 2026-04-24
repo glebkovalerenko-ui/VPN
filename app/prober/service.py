@@ -1,4 +1,4 @@
-"""Stage 5/6 prober orchestration: select, probe, geo-enrich, persist checks."""
+"""Stage 7 prober orchestration: select, probe, geo-enrich, persist checks."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class ProbeCycleStats:
 
 
 def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
-    """Run one Stage 5/6 probe cycle with deterministic selection."""
+    """Run one Stage 7 probe cycle with deterministic selection."""
     settings = app_settings or get_settings()
     stats = ProbeCycleStats()
 
@@ -62,6 +62,9 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
             "geo_provider_primary": settings.GEO_PROVIDER_PRIMARY,
             "geo_provider_fallback": settings.GEO_PROVIDER_FALLBACK,
             "geo_request_timeout_seconds": settings.GEO_REQUEST_TIMEOUT_SECONDS,
+            "speed_test_url": settings.SPEED_TEST_URL,
+            "speed_test_max_bytes": settings.SPEED_TEST_MAX_BYTES,
+            "speed_test_chunk_size": settings.SPEED_TEST_CHUNK_SIZE,
         },
     )
 
@@ -74,6 +77,9 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
         connect_timeout_seconds=settings.CONNECT_TIMEOUT_SECONDS,
         read_timeout_seconds=settings.DOWNLOAD_TIMEOUT_SECONDS,
         exit_ip_url=settings.PROBER_EXIT_IP_URL,
+        speed_test_url=settings.SPEED_TEST_URL,
+        speed_test_max_bytes=settings.SPEED_TEST_MAX_BYTES,
+        speed_test_chunk_size=settings.SPEED_TEST_CHUNK_SIZE,
     )
     geo_service = GeoService(settings)
 
@@ -130,6 +136,8 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
                 "protocol": candidate.protocol,
                 "connect_ok": result.connect_ok,
                 "connect_ms": result.connect_ms,
+                "first_byte_ms": result.first_byte_ms,
+                "download_mbps": str(result.download_mbps) if result.download_mbps is not None else None,
                 "exit_ip": result.exit_ip,
                 "exit_country": exit_country,
                 "geo_match": geo_match,
@@ -159,6 +167,8 @@ def insert_proxy_check(
                 checked_at,
                 connect_ok,
                 connect_ms,
+                first_byte_ms,
+                download_mbps,
                 exit_ip,
                 exit_country,
                 geo_match,
@@ -170,6 +180,8 @@ def insert_proxy_check(
                 :checked_at,
                 :connect_ok,
                 :connect_ms,
+                :first_byte_ms,
+                :download_mbps,
                 :exit_ip,
                 :exit_country,
                 :geo_match,
@@ -183,6 +195,8 @@ def insert_proxy_check(
             "checked_at": result.checked_at,
             "connect_ok": result.connect_ok,
             "connect_ms": result.connect_ms,
+            "first_byte_ms": result.first_byte_ms,
+            "download_mbps": result.download_mbps,
             "exit_ip": result.exit_ip,
             "exit_country": exit_country,
             "geo_match": geo_match,

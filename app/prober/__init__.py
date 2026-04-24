@@ -1,4 +1,4 @@
-﻿"""Prober package for Stage 5 liveness and exit-IP checks."""
+"""Prober package for Stage 7 connect, geo and speed checks."""
 
 from .service import run_probe_cycle
 

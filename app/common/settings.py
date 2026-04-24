@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     GEO_IP_API_BASE_URL: str = "http://ip-api.com/json"
     GEO_IPWHOIS_BASE_URL: str = "https://ipwho.is"
     SPEED_TEST_URL: str = "https://speed.hetzner.de/10MB.bin"
+    SPEED_TEST_MAX_BYTES: int = Field(default=1_048_576, ge=1)
+    SPEED_TEST_CHUNK_SIZE: int = Field(default=65_536, ge=1)
     CONNECT_TIMEOUT_SECONDS: int = Field(default=10, ge=1)
     DOWNLOAD_TIMEOUT_SECONDS: int = Field(default=20, ge=1)
     SINGBOX_BINARY: str = "sing-box"
@@ -108,6 +110,8 @@ class Settings(BaseSettings):
             "GEO_IP_API_BASE_URL": self.GEO_IP_API_BASE_URL,
             "GEO_IPWHOIS_BASE_URL": self.GEO_IPWHOIS_BASE_URL,
             "SPEED_TEST_URL": self.SPEED_TEST_URL,
+            "SPEED_TEST_MAX_BYTES": self.SPEED_TEST_MAX_BYTES,
+            "SPEED_TEST_CHUNK_SIZE": self.SPEED_TEST_CHUNK_SIZE,
             "CONNECT_TIMEOUT_SECONDS": self.CONNECT_TIMEOUT_SECONDS,
             "DOWNLOAD_TIMEOUT_SECONDS": self.DOWNLOAD_TIMEOUT_SECONDS,
             "SINGBOX_BINARY": self.SINGBOX_BINARY,
