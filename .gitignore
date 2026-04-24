@@ -1,0 +1,23 @@
+﻿# Local environment
+.env
+
+# Runtime data
+/data/logs/*
+!/data/logs/.gitkeep
+/data/snapshots/*
+!/data/snapshots/.gitkeep
+/output/*
+!/output/.gitkeep
+
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
