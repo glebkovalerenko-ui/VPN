@@ -18,6 +18,7 @@ class ProbeCandidate:
     protocol: str
     host: str | None
     port: int | None
+    source_country_tag: str | None
     last_seen_at: datetime
     last_checked_at: datetime | None
 
@@ -40,6 +41,7 @@ def select_candidates_for_probe(session: Session, *, batch_size: int) -> list[Pr
                 c.protocol,
                 c.host,
                 c.port,
+                c.source_country_tag,
                 c.last_seen_at,
                 lc.last_checked_at
             FROM proxy_candidates AS c
@@ -64,6 +66,7 @@ def select_candidates_for_probe(session: Session, *, batch_size: int) -> list[Pr
             protocol=str(row["protocol"]).lower(),
             host=row["host"],
             port=row["port"],
+            source_country_tag=row["source_country_tag"],
             last_seen_at=row["last_seen_at"],
             last_checked_at=row["last_checked_at"],
         )

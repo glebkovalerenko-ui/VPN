@@ -47,6 +47,9 @@ class Settings(BaseSettings):
 
     GEO_PROVIDER_PRIMARY: str = "ip-api"
     GEO_PROVIDER_FALLBACK: str = "ipwhois"
+    GEO_REQUEST_TIMEOUT_SECONDS: int = Field(default=6, ge=1)
+    GEO_IP_API_BASE_URL: str = "http://ip-api.com/json"
+    GEO_IPWHOIS_BASE_URL: str = "https://ipwho.is"
     SPEED_TEST_URL: str = "https://speed.hetzner.de/10MB.bin"
     CONNECT_TIMEOUT_SECONDS: int = Field(default=10, ge=1)
     DOWNLOAD_TIMEOUT_SECONDS: int = Field(default=20, ge=1)
@@ -101,6 +104,9 @@ class Settings(BaseSettings):
             "MAX_PER_HOST": self.MAX_PER_HOST,
             "GEO_PROVIDER_PRIMARY": self.GEO_PROVIDER_PRIMARY,
             "GEO_PROVIDER_FALLBACK": self.GEO_PROVIDER_FALLBACK,
+            "GEO_REQUEST_TIMEOUT_SECONDS": self.GEO_REQUEST_TIMEOUT_SECONDS,
+            "GEO_IP_API_BASE_URL": self.GEO_IP_API_BASE_URL,
+            "GEO_IPWHOIS_BASE_URL": self.GEO_IPWHOIS_BASE_URL,
             "SPEED_TEST_URL": self.SPEED_TEST_URL,
             "CONNECT_TIMEOUT_SECONDS": self.CONNECT_TIMEOUT_SECONDS,
             "DOWNLOAD_TIMEOUT_SECONDS": self.DOWNLOAD_TIMEOUT_SECONDS,
