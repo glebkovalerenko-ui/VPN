@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     PROBER_PROCESS_START_TIMEOUT_SECONDS: int = Field(default=8, ge=1)
     PROBER_EXIT_IP_URL: str = "https://api.ipify.org?format=json"
     PROBER_TEMP_DIR: str | None = None
+    SCORER_RECENT_CHECKS_LIMIT: int = Field(default=20, ge=1)
+    SCORER_MIN_ACTIVE_STABILITY: float = Field(default=0.75, ge=0, le=1)
+    SCORER_MIN_DEGRADED_STABILITY: float = Field(default=0.25, ge=0, le=1)
+    SCORER_LATENCY_GOOD_MS: int = Field(default=250, ge=1)
+    SCORER_LATENCY_BAD_MS: int = Field(default=1800, ge=1)
+    SCORER_SPEED_GOOD_MBPS: float = Field(default=30.0, ge=0)
+    SCORER_SPEED_BAD_MBPS: float = Field(default=1.5, ge=0)
+    SCORER_GEO_NEUTRAL_SCORE: float = Field(default=0.50, ge=0, le=1)
+    SCORER_MIN_ACTIVE_FRESHNESS: float = Field(default=0.60, ge=0, le=1)
+    SCORER_DEAD_FRESHNESS_MAX: float = Field(default=0.05, ge=0, le=1)
+    SCORER_FRESHNESS_PENALTY_WEIGHT: float = Field(default=0.35, ge=0)
+    SCORER_MISSING_SPEED_PENALTY: float = Field(default=0.08, ge=0)
 
     @property
     def database_url(self) -> str:
@@ -82,7 +94,7 @@ class Settings(BaseSettings):
             return str(url)
         return str(url.set(password="***"))
 
-    def safe_summary(self) -> dict[str, str | int | bool]:
+    def safe_summary(self) -> dict[str, str | int | float | bool]:
         """Return non-sensitive settings summary."""
         return {
             "PROJECT_NAME": self.PROJECT_NAME,
@@ -120,6 +132,18 @@ class Settings(BaseSettings):
             "PROBER_PROCESS_START_TIMEOUT_SECONDS": self.PROBER_PROCESS_START_TIMEOUT_SECONDS,
             "PROBER_EXIT_IP_URL": self.PROBER_EXIT_IP_URL,
             "PROBER_TEMP_DIR": self.PROBER_TEMP_DIR or "",
+            "SCORER_RECENT_CHECKS_LIMIT": self.SCORER_RECENT_CHECKS_LIMIT,
+            "SCORER_MIN_ACTIVE_STABILITY": self.SCORER_MIN_ACTIVE_STABILITY,
+            "SCORER_MIN_DEGRADED_STABILITY": self.SCORER_MIN_DEGRADED_STABILITY,
+            "SCORER_LATENCY_GOOD_MS": self.SCORER_LATENCY_GOOD_MS,
+            "SCORER_LATENCY_BAD_MS": self.SCORER_LATENCY_BAD_MS,
+            "SCORER_SPEED_GOOD_MBPS": self.SCORER_SPEED_GOOD_MBPS,
+            "SCORER_SPEED_BAD_MBPS": self.SCORER_SPEED_BAD_MBPS,
+            "SCORER_GEO_NEUTRAL_SCORE": self.SCORER_GEO_NEUTRAL_SCORE,
+            "SCORER_MIN_ACTIVE_FRESHNESS": self.SCORER_MIN_ACTIVE_FRESHNESS,
+            "SCORER_DEAD_FRESHNESS_MAX": self.SCORER_DEAD_FRESHNESS_MAX,
+            "SCORER_FRESHNESS_PENALTY_WEIGHT": self.SCORER_FRESHNESS_PENALTY_WEIGHT,
+            "SCORER_MISSING_SPEED_PENALTY": self.SCORER_MISSING_SPEED_PENALTY,
         }
 
 

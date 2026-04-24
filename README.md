@@ -1,57 +1,53 @@
-# Proxy Aggregation Project - Stage 7 (Runtime Speed Test)
+# Proxy Aggregation Project - Stage 8 (Scorer + proxy_state)
 
-## Что делает Stage 7
-Stage 7 добавляет прикладной speed test поверх уже существующего Stage 5/6 runtime path:
-- после успешного connect и получения `exit_ip` запускается HTTP speed test;
-- speed test идет через тот же локальный sing-box inbound, который использовался для `exit_ip`;
-- в `proxy_checks` сохраняются:
-  - `first_byte_ms`
-  - `download_mbps`
-- если speed test не удался, connect-успех не ломается:
-  - `connect_ok` остается `true`;
-  - `first_byte_ms` и `download_mbps` остаются `NULL`;
-  - ошибка speed test только логируется.
+## Что делает Stage 8
+Stage 8 добавляет агрегированный слой `proxy_state` поверх истории `proxy_checks`:
+- scorer читает `proxy_candidates` и последние проверки из `proxy_checks`;
+- вычисляет текущее состояние кандидата (status/latency/speed/stability/freshness/final_score);
+- делает upsert в `proxy_state`;
+- не пишет обратно в `proxy_checks` (история read-only для scorer);
+- пересчёт идемпотентный и полностью воспроизводимый;
+- полностью пересчитывает ранги:
+  - `rank_global`
+  - `rank_in_family`
+  - `rank_in_country`
 
-## Что уже покрыто в Stage 0-7
+## Что уже покрыто Stage 0-7
 - Postgres + миграции
 - fetcher -> `source_snapshots`
 - parser -> `proxy_candidates`
-- prober (sing-box runtime) -> `connect_ok`, `connect_ms`, `exit_ip`
-- geo layer -> `exit_country`, `geo_match`
-- speed layer -> `first_byte_ms`, `download_mbps`
+- prober (sing-box runtime) -> `proxy_checks`:
+  - `connect_ok`
+  - `connect_ms`
+  - `first_byte_ms`
+  - `download_mbps`
+  - `exit_ip`
+  - `exit_country`
+  - `geo_match`
 
-## Что НЕ входит в Stage 7
-- scorer
-- `proxy_state` updates
+## Что не входит в Stage 8
 - exporter
 - HTTP API
-- scheduler / очереди
+- scheduler/очереди
 
-## Требования
-- Docker + Docker Compose v2
-- Python 3.11+
-- установленный бинарь `sing-box` (через PATH или явный путь в `SINGBOX_BINARY`)
+## Переменные окружения для scorer
+Минимально важные ручки Stage 8:
+- `SCORER_RECENT_CHECKS_LIMIT`
+- `SCORER_MIN_ACTIVE_STABILITY`
+- `SCORER_MIN_DEGRADED_STABILITY`
+- `SCORER_LATENCY_GOOD_MS`
+- `SCORER_LATENCY_BAD_MS`
+- `SCORER_SPEED_GOOD_MBPS`
+- `SCORER_SPEED_BAD_MBPS`
+- `SCORER_GEO_NEUTRAL_SCORE`
+- `SCORER_MIN_ACTIVE_FRESHNESS`
+- `SCORER_DEAD_FRESHNESS_MAX`
+- `SCORER_FRESHNESS_PENALTY_WEIGHT`
+- `SCORER_MISSING_SPEED_PENALTY`
 
-## Переменные окружения
-### Prober + Geo
-- `PROBE_BATCH_SIZE`
-- `CONNECT_TIMEOUT_SECONDS`
-- `DOWNLOAD_TIMEOUT_SECONDS`
-- `SINGBOX_BINARY`
-- `PROBER_LOCAL_BIND_HOST`
-- `PROBER_BASE_LOCAL_PORT`
-- `PROBER_PROCESS_START_TIMEOUT_SECONDS`
-- `PROBER_EXIT_IP_URL`
-- `GEO_PROVIDER_PRIMARY`
-- `GEO_PROVIDER_FALLBACK`
-- `GEO_REQUEST_TIMEOUT_SECONDS`
-- `GEO_IP_API_BASE_URL`
-- `GEO_IPWHOIS_BASE_URL`
-
-### Speed Test (Stage 7)
-- `SPEED_TEST_URL`
-- `SPEED_TEST_MAX_BYTES`
-- `SPEED_TEST_CHUNK_SIZE`
+Scorer также использует общие параметры свежести:
+- `CHECK_FRESHNESS_MINUTES`
+- `MAX_SELECTION_AGE_MINUTES`
 
 ## Установка зависимостей
 ```bash
@@ -67,7 +63,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Полный цикл Stage 7
+## Полный цикл Stage 8
 1. Подготовить `.env`:
 ```bash
 cp .env.example .env
@@ -108,33 +104,43 @@ python -m app.fetcher.main
 python -m app.parser.main
 ```
 
-7. Запустить prober (connect + geo + speed):
+7. Запустить prober:
 ```bash
 python -m app.prober.main
 ```
 
-## SQL-проверки Stage 7
-### 1) Count записей, где `first_byte_ms IS NOT NULL`
+8. Запустить scorer:
 ```bash
-docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT COUNT(*) AS checks_with_first_byte FROM proxy_checks WHERE first_byte_ms IS NOT NULL;"'
+python -m app.scorer.main
 ```
 
-### 2) Count записей, где `download_mbps IS NOT NULL`
+## SQL-проверки Stage 8
+### 1) Count записей в `proxy_state`
 ```bash
-docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT COUNT(*) AS checks_with_download_mbps FROM proxy_checks WHERE download_mbps IS NOT NULL;"'
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT COUNT(*) AS proxy_state_rows FROM proxy_state;"'
 ```
 
-### 3) Последние 20 успешных speed test
+### 2) Distribution по `status`
 ```bash
-docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT checked_at, candidate_id, connect_ms, first_byte_ms, download_mbps, exit_ip, exit_country FROM proxy_checks WHERE connect_ok = TRUE AND first_byte_ms IS NOT NULL AND download_mbps IS NOT NULL ORDER BY checked_at DESC LIMIT 20;"'
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT status, COUNT(*) AS cnt FROM proxy_state GROUP BY status ORDER BY status;"'
 ```
 
-### 4) Top 20 по `download_mbps`
+### 3) Sample rows из `proxy_state`
 ```bash
-docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT checked_at, candidate_id, connect_ms, first_byte_ms, download_mbps, exit_ip, exit_country FROM proxy_checks WHERE download_mbps IS NOT NULL ORDER BY download_mbps DESC, checked_at DESC LIMIT 20;"'
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT candidate_id, status, current_country, latency_ms, download_mbps, stability_ratio, geo_confidence, freshness_score, final_score FROM proxy_state ORDER BY updated_at DESC LIMIT 20;"'
 ```
 
-### 5) Успешный connect без speed metrics
+### 4) Top 20 global
 ```bash
-docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT checked_at, candidate_id, connect_ms, first_byte_ms, download_mbps, exit_ip, exit_country, error_code FROM proxy_checks WHERE connect_ok = TRUE AND (first_byte_ms IS NULL OR download_mbps IS NULL) ORDER BY checked_at DESC LIMIT 50;"'
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT candidate_id, status, final_score, rank_global FROM proxy_state WHERE rank_global IS NOT NULL ORDER BY rank_global ASC LIMIT 20;"'
+```
+
+### 5) Top 20 by family
+```bash
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT ps.candidate_id, pc.family, ps.status, ps.final_score, ps.rank_in_family FROM proxy_state ps JOIN proxy_candidates pc ON pc.id = ps.candidate_id WHERE ps.rank_in_family IS NOT NULL ORDER BY pc.family ASC, ps.rank_in_family ASC LIMIT 20;"'
+```
+
+### 6) Top 20 by country
+```bash
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT candidate_id, current_country, status, final_score, rank_in_country FROM proxy_state WHERE current_country IS NOT NULL AND rank_in_country IS NOT NULL ORDER BY current_country ASC, rank_in_country ASC LIMIT 20;"'
 ```
