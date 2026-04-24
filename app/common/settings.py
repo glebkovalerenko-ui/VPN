@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     SPEED_TEST_URL: str = "https://speed.hetzner.de/10MB.bin"
     CONNECT_TIMEOUT_SECONDS: int = Field(default=10, ge=1)
     DOWNLOAD_TIMEOUT_SECONDS: int = Field(default=20, ge=1)
+    SINGBOX_BINARY: str = "sing-box"
+    PROBER_LOCAL_BIND_HOST: str = "127.0.0.1"
+    PROBER_BASE_LOCAL_PORT: int = Field(default=39000, ge=0, le=65535)
+    PROBER_PROCESS_START_TIMEOUT_SECONDS: int = Field(default=8, ge=1)
+    PROBER_EXIT_IP_URL: str = "https://api.ipify.org?format=json"
+    PROBER_TEMP_DIR: str | None = None
 
     @property
     def database_url(self) -> str:
@@ -98,6 +104,12 @@ class Settings(BaseSettings):
             "SPEED_TEST_URL": self.SPEED_TEST_URL,
             "CONNECT_TIMEOUT_SECONDS": self.CONNECT_TIMEOUT_SECONDS,
             "DOWNLOAD_TIMEOUT_SECONDS": self.DOWNLOAD_TIMEOUT_SECONDS,
+            "SINGBOX_BINARY": self.SINGBOX_BINARY,
+            "PROBER_LOCAL_BIND_HOST": self.PROBER_LOCAL_BIND_HOST,
+            "PROBER_BASE_LOCAL_PORT": self.PROBER_BASE_LOCAL_PORT,
+            "PROBER_PROCESS_START_TIMEOUT_SECONDS": self.PROBER_PROCESS_START_TIMEOUT_SECONDS,
+            "PROBER_EXIT_IP_URL": self.PROBER_EXIT_IP_URL,
+            "PROBER_TEMP_DIR": self.PROBER_TEMP_DIR or "",
         }
 
 
