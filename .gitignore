@@ -9,9 +9,13 @@
 /output/*
 !/output/.gitkeep
 !/output/BLACK-ETALON.txt
+!/output/BLACK-ETALON-debug.json
 !/output/WHITE-CIDR-ETALON.txt
+!/output/WHITE-CIDR-ETALON-debug.json
 !/output/WHITE-SNI-ETALON.txt
+!/output/WHITE-SNI-ETALON-debug.json
 !/output/ALL-ETALON.txt
+!/output/ALL-ETALON-debug.json
 !/output/export_manifest.json
 
 # Python cache/artifacts
