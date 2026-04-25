@@ -1,0 +1,69 @@
+{
+  "active_count": 389,
+  "considered_by_family": {
+    "black": 123,
+    "white_cidr": 248,
+    "white_sni": 18
+  },
+  "considered_candidates_total": 389,
+  "diversity_limits": {
+    "max_per_country": 500,
+    "max_per_host": 100,
+    "null_country_group": "__unknown_country__",
+    "null_host_fallback": "fingerprint then candidate_id"
+  },
+  "fallback_reason": null,
+  "fallback_used": false,
+  "generated_at": "2026-04-25T14:43:32.995310+00:00",
+  "limits": {
+    "EXPORT_ALL_LIMIT": 10000,
+    "EXPORT_BLACK_LIMIT": 5000,
+    "EXPORT_WHITE_CIDR_LIMIT": 2000,
+    "EXPORT_WHITE_SNI_LIMIT": 2000
+  },
+  "output_files": {
+    "ALL-ETALON.txt": {
+      "considered": 389,
+      "limit": 10000,
+      "selected": 389
+    },
+    "BLACK-ETALON.txt": {
+      "considered": 123,
+      "limit": 5000,
+      "selected": 123
+    },
+    "WHITE-CIDR-ETALON.txt": {
+      "considered": 248,
+      "limit": 2000,
+      "selected": 248
+    },
+    "WHITE-SNI-ETALON.txt": {
+      "considered": 18,
+      "limit": 2000,
+      "selected": 18
+    }
+  },
+  "proxy_state_status_counts": {
+    "active": 390,
+    "dead": 219,
+    "degraded": 3,
+    "unknown": 166
+  },
+  "selected_candidates_total_across_files": 778,
+  "selected_unique_candidates": 389,
+  "sorting": [
+    "final_score DESC",
+    "stability_ratio DESC NULLS LAST",
+    "last_success_at DESC NULLS LAST",
+    "candidate_id ASC"
+  ],
+  "source": {
+    "config_source": "proxy_candidates",
+    "fallback_policy": "reuse_last_good_when_active_empty",
+    "ranking_source": "proxy_state",
+    "requires_enabled_candidates": true,
+    "requires_non_empty_raw_config": true,
+    "requires_positive_final_score": true,
+    "status_filter": "active"
+  }
+}
