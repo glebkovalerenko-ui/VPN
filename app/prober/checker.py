@@ -259,16 +259,21 @@ class SingBoxProbeBackend(ProbeBackend):
                 attempts=self._speed_test_attempts,
             )
         except Exception as exc:
+            result = self._unexpected_speed_failure(exc)
             logger.warning(
                 "Speed test failed",
                 extra={
                     "candidate_id": candidate_id,
                     "listen_port": listen_port,
-                    "speed_error_code": ProbeErrorCode.PROBE_FAILED.value,
-                    "speed_error_text": self._short_error_text(exc),
+                    "speed_error_code": result.error_code.value if result.error_code else None,
+                    "speed_failure_reason": result.failure_reason.value if result.failure_reason else None,
+                    "speed_error_text": result.error_text,
+                    "speed_endpoint_url": result.endpoint_url,
+                    "speed_attempts": result.attempts,
+                    "speed_successes": result.successes,
                 },
             )
-            return None
+            return result
 
         if result.success:
             logger.info(
@@ -301,6 +306,20 @@ class SingBoxProbeBackend(ProbeBackend):
                 },
             )
         return result
+
+    def _unexpected_speed_failure(self, exc: Exception) -> SpeedMeasurement:
+        endpoint_url = self._speed_test_urls[0] if self._speed_test_urls else None
+        return SpeedMeasurement(
+            first_byte_ms=None,
+            download_mbps=None,
+            bytes_read=0,
+            endpoint_url=endpoint_url,
+            attempts=1,
+            successes=0,
+            error_code=SpeedFailureCode.UNEXPECTED_ERROR,
+            failure_reason=SpeedFailureCode.UNEXPECTED_ERROR,
+            error_text=f"Unexpected speed measurement error: {self._short_error_text(exc)}",
+        )
 
     def _extract_ip_from_response(self, response: requests.Response) -> str:
         candidate_ip: str | None = None

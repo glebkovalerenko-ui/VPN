@@ -115,18 +115,40 @@ When throughput cannot be measured, `proxy_checks` stores speed diagnostics with
 
 `download_mbps=null` now means: connect may have worked, but no valid throughput sample was produced. Check `speed_failure_reason` and `speed_error_text` to distinguish a broken endpoint, TLS/cert failure, timeout, empty body, invalid response, or another technical measurement failure.
 
+Unexpected speed-layer exceptions are normalized as speed diagnostics instead of disappearing into empty latest rows. Fresh checks that reached speed measurement should not have `connect_ok=true`, `download_mbps=null`, `speed_attempts=0`, `speed_error_code=null`, and `speed_failure_reason=null` at the same time.
+
+Older rows created before speed diagnostics existed can still have that shape. Treat them as legacy/uninstrumented latest checks until a controlled re-probe refreshes them.
+
 Quick speed diagnostics:
 ```bash
+docker compose exec pipeline-runner python -m app.common.cli_speed_diagnostics
+
 docker compose exec -T api sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
 WITH latest_checks AS (
   SELECT DISTINCT ON (candidate_id)
-    candidate_id, connect_ok, download_mbps, speed_error_code, speed_failure_reason
+    candidate_id, connect_ok, download_mbps, speed_attempts, speed_error_code, speed_failure_reason
   FROM proxy_checks
   ORDER BY candidate_id, checked_at DESC, id DESC
 )
 SELECT
   count(*) AS latest_checks,
   count(*) FILTER (WHERE connect_ok) AS connect_ok,
+  count(*) FILTER (
+    WHERE connect_ok
+      AND download_mbps IS NULL
+      AND coalesce(speed_attempts, 0) = 0
+      AND speed_error_code IS NULL
+      AND speed_failure_reason IS NULL
+  ) AS empty_speed_null_without_reason,
+  count(*) FILTER (
+    WHERE connect_ok
+      AND (
+        download_mbps IS NOT NULL
+        OR coalesce(speed_attempts, 0) > 0
+        OR speed_error_code IS NOT NULL
+        OR speed_failure_reason IS NOT NULL
+      )
+  ) AS new_speed_semantics,
   count(*) FILTER (WHERE connect_ok AND download_mbps IS NOT NULL) AS speed_measured,
   count(*) FILTER (WHERE connect_ok AND download_mbps IS NULL) AS speed_unavailable
 FROM latest_checks;"'
@@ -139,15 +161,22 @@ WITH latest_checks AS (
   ORDER BY candidate_id, checked_at DESC, id DESC
 )
 SELECT
-  coalesce(speed_failure_reason, speed_error_code, 'speed_not_available') AS reason,
+  coalesce(speed_error_code, 'speed_error_code_null') AS speed_error_code,
   count(*) AS count
 FROM latest_checks
-WHERE connect_ok AND download_mbps IS NULL
-GROUP BY reason
-ORDER BY count DESC, reason;"'
+GROUP BY 1
+ORDER BY count DESC, speed_error_code;"'
 ```
 
-Debug JSON and `export_manifest.json` include a `speed_quality` summary. Each debug item also has `speed_diagnostics` from the latest check for that candidate.
+Debug JSON and `export_manifest.json` include a `speed_quality` summary with measured/unavailable counts, `legacy_empty_speed_diagnostics`, `speed_new_format`, speed semantics, and speed error-code breakdowns.
+
+### Aggregated state vs latest check
+Exporter selection and ranking still use `proxy_state`. Debug JSON is explicit about the two different sources:
+- `state_download_mbps`, `state_latency_ms`, `state_freshness_score`, `state_geo_confidence` come from aggregated `proxy_state`;
+- `latest_check_checked_at`, `latest_check_download_mbps`, `latest_check_first_byte_ms`, `latest_check_speed_attempts`, `latest_check_speed_successes`, `latest_check_speed_error_code`, `latest_check_speed_failure_reason`, `latest_check_speed_error_text`, and `latest_check_speed_endpoint_url` come from the most recent `proxy_checks` row;
+- `latest_check_speed_semantics=legacy_no_speed_diagnostics` means the latest row predates, or otherwise lacks, modern speed diagnostics and should be refreshed by re-probe before being interpreted as a current speed failure.
+
+The older top-level debug fields `download_mbps`, `latency_ms`, `freshness_score`, `geo_confidence`, and nested `speed_diagnostics` are kept for backward compatibility, but operators should prefer the explicit `state_*` and `latest_check_*` names.
 
 ## Output fallback policy (last-good)
 Exporter keeps strict `active` selection as primary source.
@@ -166,7 +195,7 @@ TXT stays unchanged and remains the distribution format for clients.
 Debug JSON is for operator analysis and includes:
 - `summary` counters (considered/selected/limits/skip reasons);
 - `speed_quality` counters for latest checks;
-- ordered `items` with `selection_position`, `raw_config`, grouping keys, ranking metrics, and latest `speed_diagnostics`.
+- ordered `items` with `selection_position`, `raw_config`, grouping keys, aggregated `state_*` metrics, and concrete `latest_check_*` diagnostics.
 
 Quick checks (host CLI):
 ```bash
@@ -175,6 +204,9 @@ ls -la output
 
 # inspect one debug file
 cat output/BLACK-ETALON-debug.json
+
+# verify debug JSON separates aggregated state from latest speed diagnostics
+python -c "import json, pathlib; data=json.loads(pathlib.Path('output/BLACK-ETALON-debug.json').read_text(encoding='utf-8')); item=(data['items'] or [{}])[0]; print({k:item.get(k) for k in ('state_download_mbps','state_latency_ms','latest_check_checked_at','latest_check_download_mbps','latest_check_speed_attempts','latest_check_speed_error_code','latest_check_speed_semantics')})"
 
 # count debug items
 python -c "import json, pathlib; p=pathlib.Path('output/BLACK-ETALON-debug.json'); print(len(json.loads(p.read_text(encoding='utf-8'))['items']))"

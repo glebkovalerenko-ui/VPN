@@ -141,6 +141,18 @@ def run_speed_measurement(
                     bytes_read=exc.bytes_read,
                 )
             )
+        except Exception as exc:
+            failures.append(
+                SpeedAttemptFailure(
+                    endpoint_url=endpoint,
+                    attempt_number=attempt_number,
+                    code=SpeedFailureCode.UNEXPECTED_ERROR,
+                    text=_short_error_text(exc),
+                    first_byte_ms=None,
+                    bytes_read=0,
+                )
+            )
+            break
 
     if successes:
         attempts_run = len(successes) + len(failures)
@@ -159,14 +171,20 @@ def run_speed_measurement(
         )
 
     failure_reason = _primary_failure_reason(failures)
+    attempts_run = len(successes) + len(failures)
+    error_code = (
+        SpeedFailureCode.UNEXPECTED_ERROR
+        if failure_reason == SpeedFailureCode.UNEXPECTED_ERROR
+        else SpeedFailureCode.ALL_ENDPOINTS_FAILED
+    )
     return SpeedMeasurement(
         first_byte_ms=_median_optional_int([failure.first_byte_ms for failure in failures]),
         download_mbps=None,
         bytes_read=max((failure.bytes_read for failure in failures), default=0),
         endpoint_url=failures[-1].endpoint_url if failures else None,
-        attempts=max_attempts,
+        attempts=attempts_run,
         successes=0,
-        error_code=SpeedFailureCode.ALL_ENDPOINTS_FAILED,
+        error_code=error_code,
         failure_reason=failure_reason,
         error_text=_build_all_failed_text(failures),
         attempt_failures=tuple(failures),
