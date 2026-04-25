@@ -21,6 +21,7 @@ def fetch_candidates(session: Session) -> list[CandidateRecord]:
             """
             SELECT id, family
             FROM proxy_candidates
+            WHERE is_enabled = TRUE
             ORDER BY id ASC
             """
         )
@@ -175,4 +176,3 @@ def _ratio(numerator: int, denominator: int) -> Decimal | None:
     if denominator == 0:
         return None
     return (Decimal(numerator) / Decimal(denominator)).quantize(_RATIO_SCALE, rounding=ROUND_HALF_UP)
-

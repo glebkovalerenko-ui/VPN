@@ -39,6 +39,7 @@ def select_export_candidates(
             WHERE ps.status = :status
               AND ps.final_score IS NOT NULL
               AND ps.final_score > 0
+              AND c.is_enabled = TRUE
               AND c.raw_config IS NOT NULL
               AND btrim(c.raw_config) <> ''
             ORDER BY

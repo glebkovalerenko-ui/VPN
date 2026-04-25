@@ -1,112 +1,110 @@
-# Proxy Aggregation Project - Stage 10 (Minimal HTTP API)
+# Proxy Aggregation Project - Stage 11 (Runtime Hardening + Orchestration)
 
-## What Stage 10 adds
-Stage 10 introduces a minimal read-only HTTP API on top of already prepared data and export artifacts.
+Stage 11 turns the repository into a runnable deployment pipeline:
+- multi-container runtime in `docker-compose.yml`;
+- automated DB init (`alembic` + source seed);
+- continuous orchestration loop (`fetcher -> parser -> prober -> scorer -> exporter`);
+- `sing-box` bundled inside app container image;
+- optional auto-publication of TXT exports to Git remote.
 
-API behavior:
-- reads state from `proxy_state` + `proxy_candidates`;
-- reads manifest and TXT files from `output/`;
-- does not recalculate quality;
-- does not trigger fetcher/parser/prober/scorer/exporter;
-- has no auth/tokens/user cabinet in this stage.
+## Runtime topology
+`docker compose up -d --build` starts:
+- `db` - Postgres 16
+- `db-init` - one-shot migrations + seed (`sql/seeds/001_sources.sql`)
+- `pipeline-runner` - Stage 11 orchestrator loop
+- `api` - read-only HTTP API over DB + `output/`
 
-## Stage 0-9 coverage
-- Postgres + migrations
-- fetcher -> `source_snapshots`
-- parser -> `proxy_candidates`
-- prober -> `proxy_checks`
-- scorer -> `proxy_state`
-- exporter -> `output/*.txt` + `output/export_manifest.json`
-
-## Out of scope for Stage 10
-- scheduler/queues
-- subscription server
-- authentication/authorization
-- automatic pipeline execution from API
-
-## Install dependencies
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Windows PowerShell:
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-## Full pipeline through Stage 9 (data preparation)
-1. Prepare `.env`:
+## Quick start (Linux/macOS)
+1. Create env file:
 ```bash
 cp .env.example .env
 ```
 
-Windows PowerShell:
+2. Optional: enable Git publication from `pipeline-runner`:
+```dotenv
+PUBLISH_ENABLED=true
+PUBLISH_REMOTE=origin
+PUBLISH_BRANCH=main
+PUBLISH_GIT_AUTHOR_NAME=proxy-mvp-bot
+PUBLISH_GIT_AUTHOR_EMAIL=proxy-mvp-bot@users.noreply.github.com
+```
+
+3. Start full stack:
+```bash
+docker compose up -d --build
+```
+
+4. Check container status:
+```bash
+docker compose ps
+```
+
+5. Check orchestrator logs:
+```bash
+docker compose logs -f pipeline-runner
+```
+
+6. Check API health:
+```bash
+curl -s http://127.0.0.1:8000/health
+```
+
+7. Inspect generated output:
+```bash
+ls -la output
+cat output/export_manifest.json
+```
+
+## Quick start (Windows PowerShell)
+1. Create env file:
 ```powershell
 Copy-Item .env.example .env
 ```
 
-2. Start Postgres:
-```bash
-docker compose up -d db
-```
-
-3. Run migrations:
-```bash
-alembic -c alembic.ini upgrade head
-```
-
-4. Seed sources:
-```bash
-docker compose exec -T db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/seeds/001_sources.sql
-```
-
-Windows PowerShell:
+2. Start full stack:
 ```powershell
-Get-Content sql/seeds/001_sources.sql | docker compose exec -T db sh -lc 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+docker compose up -d --build
 ```
 
-5. Run fetcher:
-```bash
-python -m app.fetcher.main
+3. Check status/logs:
+```powershell
+docker compose ps
+docker compose logs -f pipeline-runner
 ```
 
-6. Run parser:
-```bash
-python -m app.parser.main
+4. Check API/output:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+Get-ChildItem output
+Get-Content output/export_manifest.json
 ```
 
-7. Run prober:
-```bash
-python -m app.prober.main
-```
+## Environment notes
+- `.env.example` is compose-first and sets `POSTGRES_HOST=db`.
+- For host-local CLI runs (outside Docker), set `POSTGRES_HOST=127.0.0.1`.
+- `FETCH_INTERVAL_MINUTES` controls orchestrator cycle interval.
+- `ORCHESTRATOR_STARTUP_DELAY_SECONDS` delays first cycle after container start.
+- `ORCHESTRATOR_EXIT_ON_FAILURE=true` makes runner exit on first failed cycle.
 
-8. Run scorer:
-```bash
-python -m app.scorer.main
-```
+## Output fallback policy (last-good)
+Exporter keeps strict `active` selection as primary source.
+If current cycle has zero active candidates:
+- exporter reuses previous non-empty TXT exports from `output/`;
+- manifest marks `fallback_used=true` and includes `fallback_reason`.
 
-9. Run exporter:
-```bash
-python -m app.exporter.main
-```
+If there is no previous non-empty output, exporter writes current (empty) selection and records reason in manifest.
 
-## Run Stage 10 API
-```bash
-uvicorn app.api.main:app --host 0.0.0.0 --port 8000
-```
+## Git publication behavior
+Publication is implemented in `app/publisher/git_publish.py` and is disabled by default (`PUBLISH_ENABLED=false`).
 
-Alternative:
-```bash
-python -m app.api.main
-```
+When enabled:
+- stages `output/BLACK-ETALON.txt`, `output/WHITE-CIDR-ETALON.txt`, `output/WHITE-SNI-ETALON.txt`, `output/ALL-ETALON.txt`, `output/export_manifest.json`;
+- commits only when content changed;
+- pushes `HEAD` to `${PUBLISH_REMOTE}:${PUBLISH_BRANCH}`.
 
-OpenAPI docs (local):
-- `http://127.0.0.1:8000/docs`
-- `http://127.0.0.1:8000/redoc`
+Required for successful push:
+- valid git remote access from runtime environment;
+- repository credentials/token configured for non-interactive push.
 
 ## API endpoints
 - `GET /health`
@@ -115,125 +113,28 @@ OpenAPI docs (local):
 - `GET /exports/manifest`
 - `GET /exports/files/{file_name}`
 
-### `GET /health`
-Returns service and dependency readiness:
-```json
-{
-  "status": "ok",
-  "db": "ok",
-  "output_dir_exists": true,
-  "manifest_exists": true,
-  "db_error": null
-}
-```
-
-### `GET /state/top`
-Top ranked rows from `proxy_state` (joined with `proxy_candidates`).
-
-Query params:
-- `limit` (default `50`, max `500`)
-- `status` (default `active`)
-- `family` (`black`, `white_cidr`, `white_sni`)
-- `country` (ISO country code, case-insensitive input)
-- `only_positive_score` (default `true`)
-
-### `GET /state/candidates`
-Filtered/paginated candidate list.
-
-Query params:
-- `limit` (default `100`, max `1000`)
-- `offset` (default `0`)
-- `status` (`active`, `degraded`, `dead`, `unknown`)
-- `family` (`black`, `white_cidr`, `white_sni`)
-- `protocol` (exact protocol match)
-- `country` (ISO country code, case-insensitive input)
-- `enabled_only` (`true`/`false`)
-- `min_final_score` (decimal threshold)
-- `only_positive_score` (`true`/`false`)
-
-### `GET /exports/manifest`
-Returns `output/export_manifest.json` as JSON. If manifest is missing, endpoint returns `404`.
-
-### `GET /exports/files/{file_name}`
-Downloads one TXT export file from `output/`.
-
-Examples:
-- `/exports/files/BLACK-ETALON.txt`
-- `/exports/files/WHITE-CIDR-ETALON.txt`
-- `/exports/files/WHITE-SNI-ETALON.txt`
-- `/exports/files/ALL-ETALON.txt`
-
-Only `.txt` files are allowed on this endpoint.
-
-## API checks (curl)
-Health:
+## Manual stage commands (debug only)
+The Stage 11 default is orchestrated runtime. Individual commands remain available:
 ```bash
-curl -s http://127.0.0.1:8000/health
+python -m app.fetcher.main
+python -m app.parser.main
+python -m app.prober.main
+python -m app.scorer.main
+python -m app.exporter.main
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Top active proxies:
+## Typical operational checks
+Database connectivity:
 ```bash
-curl -s "http://127.0.0.1:8000/state/top?limit=20&status=active"
+python -m app.common.cli_check_db
 ```
 
-Filtered candidates:
+Settings snapshot:
 ```bash
-curl -s "http://127.0.0.1:8000/state/candidates?family=white_sni&enabled_only=true&limit=30"
+python -m app.common.cli_show_settings
 ```
 
-Manifest:
-```bash
-curl -s http://127.0.0.1:8000/exports/manifest
-```
-
-Download TXT:
-```bash
-curl -fL "http://127.0.0.1:8000/exports/files/ALL-ETALON.txt" -o ALL-ETALON.txt
-```
-
-## API checks (Windows PowerShell)
-Health:
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-```
-
-Top active proxies:
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/state/top?limit=20&status=active"
-```
-
-Filtered candidates:
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/state/candidates?family=white_sni&enabled_only=true&limit=30"
-```
-
-Manifest:
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/exports/manifest
-```
-
-Download TXT:
-```powershell
-Invoke-WebRequest "http://127.0.0.1:8000/exports/files/ALL-ETALON.txt" -OutFile "ALL-ETALON.txt"
-```
-
-## Output checks (optional)
-List output files:
-```bash
-ls -la output
-```
-
-Windows PowerShell:
-```powershell
-Get-ChildItem output
-```
-
-Inspect manifest:
-```bash
-cat output/export_manifest.json
-```
-
-Windows PowerShell:
-```powershell
-Get-Content output/export_manifest.json
-```
+OpenAPI docs:
+- `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/redoc`

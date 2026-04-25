@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from app.common.db import session_scope
@@ -23,6 +24,12 @@ WHITE_CIDR_FILE = "WHITE-CIDR-ETALON.txt"
 WHITE_SNI_FILE = "WHITE-SNI-ETALON.txt"
 ALL_FILE = "ALL-ETALON.txt"
 MANIFEST_FILE = "export_manifest.json"
+_OUTPUT_FILES: tuple[str, ...] = (
+    BLACK_FILE,
+    WHITE_CIDR_FILE,
+    WHITE_SNI_FILE,
+    ALL_FILE,
+)
 
 _UNKNOWN_COUNTRY_GROUP = "__unknown_country__"
 
@@ -53,6 +60,15 @@ class ExportCycleStats:
             "output_dir": self.output_dir,
             "manifest_path": self.manifest_path,
         }
+
+
+@dataclass(slots=True, frozen=True)
+class LastGoodFallback:
+    """Resolution outcome for last-good export fallback policy."""
+
+    use_fallback: bool
+    reason: str | None
+    lines_by_file: dict[str, list[str]]
 
 
 def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
@@ -108,36 +124,58 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
     }
 
     output_dir = PROJECT_ROOT / "output"
-    for file_name, selected_candidates in selections.items():
-        write_txt_atomic(
-            output_dir / file_name,
-            [candidate.raw_config for candidate in selected_candidates],
+    selected_lines_by_file = {
+        file_name: [candidate.raw_config for candidate in selected_candidates]
+        for file_name, selected_candidates in selections.items()
+    }
+    fallback = _resolve_last_good_fallback(
+        output_dir=output_dir,
+        active_count=len(eligible_candidates),
+        selected_lines_by_file=selected_lines_by_file,
+    )
+    if fallback.use_fallback:
+        selected_lines_by_file = fallback.lines_by_file
+        logger.warning(
+            "Exporter used last-good fallback",
+            extra={
+                "fallback_reason": fallback.reason,
+                "active_candidates": len(eligible_candidates),
+            },
         )
+
+    for file_name, selected_lines in selected_lines_by_file.items():
+        write_txt_atomic(output_dir / file_name, selected_lines)
+
+    selected_unique_candidates = len(
+        {
+            line
+            for selected_lines in selected_lines_by_file.values()
+            for line in selected_lines
+        }
+    )
 
     manifest = _build_manifest(
         generated_at=generated_at,
         settings=settings,
+        active_count=len(eligible_candidates),
         eligible_candidates=eligible_candidates,
         by_family=by_family,
-        selections=selections,
+        selected_lines_by_file=selected_lines_by_file,
+        selected_unique_candidates=selected_unique_candidates,
         status_counts=status_counts,
+        fallback_used=fallback.use_fallback,
+        fallback_reason=fallback.reason,
     )
     manifest_path = output_dir / MANIFEST_FILE
     write_json_atomic(manifest_path, manifest)
 
-    selected_ids = {
-        candidate.candidate_id
-        for selected_candidates in selections.values()
-        for candidate in selected_candidates
-    }
-
     stats.considered_candidates = len(eligible_candidates)
-    stats.selected_total_across_files = sum(len(items) for items in selections.values())
-    stats.selected_unique_candidates = len(selected_ids)
-    stats.black_selected = len(selections[BLACK_FILE])
-    stats.white_cidr_selected = len(selections[WHITE_CIDR_FILE])
-    stats.white_sni_selected = len(selections[WHITE_SNI_FILE])
-    stats.all_selected = len(selections[ALL_FILE])
+    stats.selected_total_across_files = sum(len(items) for items in selected_lines_by_file.values())
+    stats.selected_unique_candidates = selected_unique_candidates
+    stats.black_selected = len(selected_lines_by_file[BLACK_FILE])
+    stats.white_cidr_selected = len(selected_lines_by_file[WHITE_CIDR_FILE])
+    stats.white_sni_selected = len(selected_lines_by_file[WHITE_SNI_FILE])
+    stats.all_selected = len(selected_lines_by_file[ALL_FILE])
     stats.output_dir = str(output_dir)
     stats.manifest_path = str(manifest_path)
 
@@ -183,6 +221,50 @@ def _apply_diversity_limits(
     return selected
 
 
+def _resolve_last_good_fallback(
+    *,
+    output_dir: Path,
+    active_count: int,
+    selected_lines_by_file: dict[str, list[str]],
+) -> LastGoodFallback:
+    if active_count > 0:
+        return LastGoodFallback(
+            use_fallback=False,
+            reason=None,
+            lines_by_file=selected_lines_by_file,
+        )
+
+    existing_lines_by_file = {
+        file_name: _read_existing_lines(output_dir / file_name)
+        for file_name in _OUTPUT_FILES
+    }
+    existing_non_empty_total = sum(len(lines) for lines in existing_lines_by_file.values())
+    if existing_non_empty_total == 0:
+        return LastGoodFallback(
+            use_fallback=False,
+            reason="no_active_candidates_and_no_last_good_exports",
+            lines_by_file=selected_lines_by_file,
+        )
+
+    return LastGoodFallback(
+        use_fallback=True,
+        reason="no_active_candidates_reused_last_good_exports",
+        lines_by_file=existing_lines_by_file,
+    )
+
+
+def _read_existing_lines(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+
+    lines: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
 def _country_group(country: str | None) -> str:
     if country is None:
         return _UNKNOWN_COUNTRY_GROUP
@@ -209,10 +291,14 @@ def _build_manifest(
     *,
     generated_at: datetime,
     settings: Settings,
+    active_count: int,
     eligible_candidates: list[ExportCandidate],
     by_family: dict[str, list[ExportCandidate]],
-    selections: dict[str, list[ExportCandidate]],
+    selected_lines_by_file: dict[str, list[str]],
+    selected_unique_candidates: int,
     status_counts: dict[str, int],
+    fallback_used: bool,
+    fallback_reason: str | None,
 ) -> dict[str, Any]:
     output_limits = {
         BLACK_FILE: settings.EXPORT_BLACK_LIMIT,
@@ -227,29 +313,28 @@ def _build_manifest(
         ALL_FILE: len(eligible_candidates),
     }
 
-    selected_ids = {
-        candidate.candidate_id
-        for selected_candidates in selections.values()
-        for candidate in selected_candidates
-    }
-
     output_files = {
         file_name: {
             "considered": considered_by_file[file_name],
-            "selected": len(selected_candidates),
+            "selected": len(selected_lines_by_file[file_name]),
             "limit": output_limits[file_name],
         }
-        for file_name, selected_candidates in selections.items()
+        for file_name in _OUTPUT_FILES
     }
 
     return {
         "generated_at": generated_at.isoformat(),
+        "active_count": active_count,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
         "source": {
             "ranking_source": "proxy_state",
             "config_source": "proxy_candidates",
             "status_filter": ProxyStatus.ACTIVE.value,
             "requires_positive_final_score": True,
             "requires_non_empty_raw_config": True,
+            "requires_enabled_candidates": True,
+            "fallback_policy": "reuse_last_good_when_active_empty",
         },
         "sorting": [
             "final_score DESC",
@@ -276,7 +361,8 @@ def _build_manifest(
             SourceFamily.WHITE_SNI.value: len(by_family[SourceFamily.WHITE_SNI.value]),
         },
         "proxy_state_status_counts": status_counts,
-        "selected_candidates_total_across_files": sum(len(items) for items in selections.values()),
-        "selected_unique_candidates": len(selected_ids),
+        "selected_candidates_total_across_files": sum(len(items) for items in selected_lines_by_file.values()),
+        "selected_unique_candidates": selected_unique_candidates,
         "output_files": output_files,
     }
+

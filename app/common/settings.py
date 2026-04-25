@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None
 
     FETCH_INTERVAL_MINUTES: int = Field(default=15, ge=1)
+    ORCHESTRATOR_STARTUP_DELAY_SECONDS: int = Field(default=5, ge=0)
+    ORCHESTRATOR_EXIT_ON_FAILURE: bool = False
     PROBE_BATCH_SIZE: int = Field(default=200, ge=1)
     CHECK_FRESHNESS_MINUTES: int = Field(default=60, ge=1)
     MAX_SELECTION_AGE_MINUTES: int = Field(default=180, ge=1)
@@ -74,6 +76,14 @@ class Settings(BaseSettings):
     SCORER_FRESHNESS_PENALTY_WEIGHT: float = Field(default=0.35, ge=0)
     SCORER_MISSING_SPEED_PENALTY: float = Field(default=0.08, ge=0)
 
+    PUBLISH_ENABLED: bool = False
+    PUBLISH_REMOTE: str = "origin"
+    PUBLISH_BRANCH: str = "main"
+    PUBLISH_GIT_AUTHOR_NAME: str = "proxy-mvp-bot"
+    PUBLISH_GIT_AUTHOR_EMAIL: str = "proxy-mvp-bot@users.noreply.github.com"
+    PUBLISH_COMMIT_MESSAGE_PREFIX: str = "chore(exports): refresh etalon outputs"
+    PUBLISH_PUSH_TIMEOUT_SECONDS: int = Field(default=60, ge=1)
+
     @property
     def database_url(self) -> str:
         """Return effective SQLAlchemy DSN."""
@@ -107,6 +117,8 @@ class Settings(BaseSettings):
             "DATABASE_URL": self.masked_database_url,
             "DATABASE_URL_EXPLICIT": bool(self.DATABASE_URL),
             "FETCH_INTERVAL_MINUTES": self.FETCH_INTERVAL_MINUTES,
+            "ORCHESTRATOR_STARTUP_DELAY_SECONDS": self.ORCHESTRATOR_STARTUP_DELAY_SECONDS,
+            "ORCHESTRATOR_EXIT_ON_FAILURE": self.ORCHESTRATOR_EXIT_ON_FAILURE,
             "PROBE_BATCH_SIZE": self.PROBE_BATCH_SIZE,
             "CHECK_FRESHNESS_MINUTES": self.CHECK_FRESHNESS_MINUTES,
             "MAX_SELECTION_AGE_MINUTES": self.MAX_SELECTION_AGE_MINUTES,
@@ -144,6 +156,13 @@ class Settings(BaseSettings):
             "SCORER_DEAD_FRESHNESS_MAX": self.SCORER_DEAD_FRESHNESS_MAX,
             "SCORER_FRESHNESS_PENALTY_WEIGHT": self.SCORER_FRESHNESS_PENALTY_WEIGHT,
             "SCORER_MISSING_SPEED_PENALTY": self.SCORER_MISSING_SPEED_PENALTY,
+            "PUBLISH_ENABLED": self.PUBLISH_ENABLED,
+            "PUBLISH_REMOTE": self.PUBLISH_REMOTE,
+            "PUBLISH_BRANCH": self.PUBLISH_BRANCH,
+            "PUBLISH_GIT_AUTHOR_NAME": self.PUBLISH_GIT_AUTHOR_NAME,
+            "PUBLISH_GIT_AUTHOR_EMAIL": self.PUBLISH_GIT_AUTHOR_EMAIL,
+            "PUBLISH_COMMIT_MESSAGE_PREFIX": self.PUBLISH_COMMIT_MESSAGE_PREFIX,
+            "PUBLISH_PUSH_TIMEOUT_SECONDS": self.PUBLISH_PUSH_TIMEOUT_SECONDS,
         }
 
 
