@@ -20,7 +20,11 @@ from .models import (
     ExportSelectionSummary,
     SelectedExportItem,
 )
-from .selectors import fetch_proxy_state_status_counts, select_export_candidates
+from .selectors import (
+    fetch_proxy_state_status_counts,
+    fetch_speed_quality_summary,
+    select_export_candidates,
+)
 from .writer import write_json_atomic, write_txt_atomic
 
 logger = get_logger(__name__)
@@ -99,6 +103,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
             status=ProxyStatus.ACTIVE,
         )
         status_counts = fetch_proxy_state_status_counts(session)
+        speed_quality_summary = fetch_speed_quality_summary(session)
 
     by_family = {
         SourceFamily.BLACK.value: [
@@ -170,6 +175,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
             fallback_used=fallback.use_fallback,
             fallback_reason=fallback.reason,
             exported_lines_count=len(selected_lines_by_file[export_name]),
+            speed_quality_summary=speed_quality_summary,
         )
         write_json_atomic(output_dir / _DEBUG_FILE_BY_EXPORT[export_name], debug_payload)
 
@@ -190,6 +196,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
         selected_lines_by_file=selected_lines_by_file,
         selected_unique_candidates=selected_unique_candidates,
         status_counts=status_counts,
+        speed_quality_summary=speed_quality_summary,
         fallback_used=fallback.use_fallback,
         fallback_reason=fallback.reason,
     )
@@ -358,6 +365,7 @@ def _build_debug_export_payload(
     fallback_used: bool,
     fallback_reason: str | None,
     exported_lines_count: int,
+    speed_quality_summary: dict[str, object],
 ) -> dict[str, Any]:
     summary = selection_result.summary
     summary_payload: dict[str, int] = {
@@ -394,6 +402,14 @@ def _build_debug_export_payload(
             "freshness_score": _decimal_to_json_number(item.candidate.freshness_score),
             "latency_ms": item.candidate.latency_ms,
             "download_mbps": _decimal_to_json_number(item.candidate.download_mbps),
+            "speed_diagnostics": {
+                "speed_error_code": item.candidate.speed_error_code,
+                "speed_failure_reason": item.candidate.speed_failure_reason,
+                "speed_error_text": item.candidate.speed_error_text,
+                "speed_endpoint_url": item.candidate.speed_endpoint_url,
+                "speed_attempts": item.candidate.speed_attempts,
+                "speed_successes": item.candidate.speed_successes,
+            },
             "last_success_at": _datetime_to_iso(item.candidate.last_success_at),
             "rank_global": item.candidate.rank_global,
             "rank_in_family": item.candidate.rank_in_family,
@@ -407,6 +423,7 @@ def _build_debug_export_payload(
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
         "summary": summary_payload,
+        "speed_quality": speed_quality_summary,
         "items": items,
     }
 
@@ -433,6 +450,7 @@ def _build_manifest(
     selected_lines_by_file: dict[str, list[str]],
     selected_unique_candidates: int,
     status_counts: dict[str, int],
+    speed_quality_summary: dict[str, object],
     fallback_used: bool,
     fallback_reason: str | None,
 ) -> dict[str, Any]:
@@ -497,6 +515,7 @@ def _build_manifest(
             SourceFamily.WHITE_SNI.value: len(by_family[SourceFamily.WHITE_SNI.value]),
         },
         "proxy_state_status_counts": status_counts,
+        "speed_quality": speed_quality_summary,
         "selected_candidates_total_across_files": sum(len(items) for items in selected_lines_by_file.values()),
         "selected_unique_candidates": selected_unique_candidates,
         "output_files": output_files,

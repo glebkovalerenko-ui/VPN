@@ -16,7 +16,7 @@ from .config_builder import build_outbound_config, build_probe_config
 from .errors import ControlledProbeError, ProbeErrorCode, classify_request_exception
 from .selectors import ProbeCandidate
 from .singbox import SingBoxRuntime
-from .speedtest import SpeedTestResult, run_speed_test
+from .speedtest import SpeedFailureCode, SpeedMeasurement, run_speed_measurement
 
 _FALLBACK_EXIT_IP_URLS: tuple[str, ...] = (
     "https://api.ipify.org?format=json",
@@ -39,6 +39,12 @@ class ProbeResult:
     exit_ip: str | None
     first_byte_ms: int | None = None
     download_mbps: Decimal | None = None
+    speed_error_code: str | None = None
+    speed_failure_reason: str | None = None
+    speed_error_text: str | None = None
+    speed_endpoint_url: str | None = None
+    speed_attempts: int = 0
+    speed_successes: int = 0
     error_code: str | None = None
     error_text: str | None = None
 
@@ -64,7 +70,9 @@ class SingBoxProbeBackend(ProbeBackend):
         connect_timeout_seconds: int,
         read_timeout_seconds: int,
         exit_ip_url: str,
-        speed_test_url: str,
+        speed_test_urls: tuple[str, ...],
+        speed_test_attempts: int,
+        speed_test_timeout: tuple[int, int],
         speed_test_max_bytes: int,
         speed_test_chunk_size: int,
     ) -> None:
@@ -84,7 +92,9 @@ class SingBoxProbeBackend(ProbeBackend):
         self._timeout = (connect_timeout_seconds, read_timeout_seconds)
         self._session = requests.Session()
         self._exit_ip_urls = self._build_exit_ip_urls(exit_ip_url)
-        self._speed_test_url = speed_test_url.strip()
+        self._speed_test_urls = tuple(url.strip() for url in speed_test_urls if url.strip())
+        self._speed_test_attempts = speed_test_attempts
+        self._speed_test_timeout = speed_test_timeout
         self._speed_test_max_bytes = speed_test_max_bytes
         self._speed_test_chunk_size = speed_test_chunk_size
 
@@ -126,6 +136,14 @@ class SingBoxProbeBackend(ProbeBackend):
                 exit_ip=exit_ip,
                 first_byte_ms=speed_result.first_byte_ms if speed_result else None,
                 download_mbps=speed_result.download_mbps if speed_result else None,
+                speed_error_code=speed_result.error_code.value if speed_result and speed_result.error_code else None,
+                speed_failure_reason=(
+                    speed_result.failure_reason.value if speed_result and speed_result.failure_reason else None
+                ),
+                speed_error_text=speed_result.error_text if speed_result else None,
+                speed_endpoint_url=speed_result.endpoint_url if speed_result else None,
+                speed_attempts=speed_result.attempts if speed_result else 0,
+                speed_successes=speed_result.successes if speed_result else 0,
             )
         except ControlledProbeError as exc:
             return ProbeResult(
@@ -198,46 +216,48 @@ class SingBoxProbeBackend(ProbeBackend):
         candidate_id: str,
         listen_port: int,
         proxies: dict[str, str],
-    ) -> SpeedTestResult | None:
-        if not self._speed_test_url:
+    ) -> SpeedMeasurement | None:
+        if not self._speed_test_urls:
             logger.warning(
-                "Speed test skipped: SPEED_TEST_URL is empty",
+                "Speed test skipped: no speed endpoints configured",
                 extra={"candidate_id": candidate_id},
             )
-            return None
+            return SpeedMeasurement(
+                first_byte_ms=None,
+                download_mbps=None,
+                bytes_read=0,
+                endpoint_url=None,
+                attempts=0,
+                successes=0,
+                error_code=SpeedFailureCode.ALL_ENDPOINTS_FAILED,
+                failure_reason=SpeedFailureCode.INVALID_RESPONSE,
+                error_text="No speed test endpoints configured",
+            )
 
         logger.info(
             "Speed test started",
             extra={
                 "candidate_id": candidate_id,
                 "listen_port": listen_port,
-                "speed_test_url": self._speed_test_url,
+                "speed_test_urls": self._speed_test_urls,
+                "speed_test_attempts": self._speed_test_attempts,
+                "speed_test_timeout": self._speed_test_timeout,
                 "speed_test_max_bytes": self._speed_test_max_bytes,
                 "speed_test_chunk_size": self._speed_test_chunk_size,
             },
         )
 
         try:
-            result = run_speed_test(
+            result = run_speed_measurement(
                 session=self._session,
-                url=self._speed_test_url,
+                urls=self._speed_test_urls,
                 proxies=proxies,
-                timeout=self._timeout,
+                timeout=self._speed_test_timeout,
                 max_bytes=self._speed_test_max_bytes,
                 chunk_size=self._speed_test_chunk_size,
                 user_agent=_SPEED_TEST_USER_AGENT,
+                attempts=self._speed_test_attempts,
             )
-        except requests.RequestException as exc:
-            logger.warning(
-                "Speed test failed",
-                extra={
-                    "candidate_id": candidate_id,
-                    "listen_port": listen_port,
-                    "speed_error_code": classify_request_exception(exc).value,
-                    "speed_error_text": self._short_error_text(exc),
-                },
-            )
-            return None
         except Exception as exc:
             logger.warning(
                 "Speed test failed",
@@ -250,16 +270,36 @@ class SingBoxProbeBackend(ProbeBackend):
             )
             return None
 
-        logger.info(
-            "Speed test completed",
-            extra={
-                "candidate_id": candidate_id,
-                "listen_port": listen_port,
-                "bytes_read": result.bytes_read,
-                "first_byte_ms": result.first_byte_ms,
-                "download_mbps": str(result.download_mbps),
-            },
-        )
+        if result.success:
+            logger.info(
+                "Speed test completed",
+                extra={
+                    "candidate_id": candidate_id,
+                    "listen_port": listen_port,
+                    "bytes_read": result.bytes_read,
+                    "first_byte_ms": result.first_byte_ms,
+                    "download_mbps": str(result.download_mbps),
+                    "speed_endpoint_url": result.endpoint_url,
+                    "speed_attempts": result.attempts,
+                    "speed_successes": result.successes,
+                },
+            )
+        else:
+            logger.warning(
+                "Speed test unavailable",
+                extra={
+                    "candidate_id": candidate_id,
+                    "listen_port": listen_port,
+                    "first_byte_ms": result.first_byte_ms,
+                    "bytes_read": result.bytes_read,
+                    "speed_error_code": result.error_code.value if result.error_code else None,
+                    "speed_failure_reason": result.failure_reason.value if result.failure_reason else None,
+                    "speed_error_text": result.error_text,
+                    "speed_endpoint_url": result.endpoint_url,
+                    "speed_attempts": result.attempts,
+                    "speed_successes": result.successes,
+                },
+            )
         return result
 
     def _extract_ip_from_response(self, response: requests.Response) -> str:

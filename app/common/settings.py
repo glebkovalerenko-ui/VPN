@@ -15,6 +15,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = PROJECT_ROOT / ".env"
 
 
+def _parse_env_list(raw_value: str) -> list[str]:
+    values: list[str] = []
+    for item in raw_value.replace("\n", ",").split(","):
+        value = item.strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
 class Settings(BaseSettings):
     """Centralized configuration for all services."""
 
@@ -52,7 +61,15 @@ class Settings(BaseSettings):
     GEO_REQUEST_TIMEOUT_SECONDS: int = Field(default=6, ge=1)
     GEO_IP_API_BASE_URL: str = "http://ip-api.com/json"
     GEO_IPWHOIS_BASE_URL: str = "https://ipwho.is"
-    SPEED_TEST_URL: str = "https://speed.hetzner.de/10MB.bin"
+    SPEED_TEST_URLS: str = (
+        "http://cachefly.cachefly.net/1mb.test,"
+        "https://speed.cloudflare.com/__down?bytes=1048576,"
+        "https://proof.ovh.net/files/1Mb.dat"
+    )
+    SPEED_TEST_URL: str = "http://cachefly.cachefly.net/1mb.test"
+    SPEED_TEST_ATTEMPTS: int = Field(default=3, ge=1, le=10)
+    SPEED_TEST_CONNECT_TIMEOUT_SECONDS: int = Field(default=6, ge=1)
+    SPEED_TEST_READ_TIMEOUT_SECONDS: int = Field(default=12, ge=1)
     SPEED_TEST_MAX_BYTES: int = Field(default=1_048_576, ge=1)
     SPEED_TEST_CHUNK_SIZE: int = Field(default=65_536, ge=1)
     CONNECT_TIMEOUT_SECONDS: int = Field(default=10, ge=1)
@@ -105,6 +122,23 @@ class Settings(BaseSettings):
             return str(url)
         return str(url.set(password="***"))
 
+    @property
+    def speed_test_urls(self) -> tuple[str, ...]:
+        """Return deterministic speed endpoint list with legacy URL as fallback."""
+        urls = _parse_env_list(self.SPEED_TEST_URLS)
+        legacy_url = self.SPEED_TEST_URL.strip()
+        if legacy_url and legacy_url not in urls:
+            urls.append(legacy_url)
+        return tuple(urls)
+
+    @property
+    def speed_test_timeout(self) -> tuple[int, int]:
+        """Return requests timeout tuple for speed measurements."""
+        return (
+            self.SPEED_TEST_CONNECT_TIMEOUT_SECONDS,
+            self.SPEED_TEST_READ_TIMEOUT_SECONDS,
+        )
+
     def safe_summary(self) -> dict[str, str | int | float | bool]:
         """Return non-sensitive settings summary."""
         return {
@@ -134,7 +168,11 @@ class Settings(BaseSettings):
             "GEO_REQUEST_TIMEOUT_SECONDS": self.GEO_REQUEST_TIMEOUT_SECONDS,
             "GEO_IP_API_BASE_URL": self.GEO_IP_API_BASE_URL,
             "GEO_IPWHOIS_BASE_URL": self.GEO_IPWHOIS_BASE_URL,
+            "SPEED_TEST_URLS": ",".join(self.speed_test_urls),
             "SPEED_TEST_URL": self.SPEED_TEST_URL,
+            "SPEED_TEST_ATTEMPTS": self.SPEED_TEST_ATTEMPTS,
+            "SPEED_TEST_CONNECT_TIMEOUT_SECONDS": self.SPEED_TEST_CONNECT_TIMEOUT_SECONDS,
+            "SPEED_TEST_READ_TIMEOUT_SECONDS": self.SPEED_TEST_READ_TIMEOUT_SECONDS,
             "SPEED_TEST_MAX_BYTES": self.SPEED_TEST_MAX_BYTES,
             "SPEED_TEST_CHUNK_SIZE": self.SPEED_TEST_CHUNK_SIZE,
             "CONNECT_TIMEOUT_SECONDS": self.CONNECT_TIMEOUT_SECONDS,

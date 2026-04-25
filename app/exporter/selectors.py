@@ -19,6 +19,18 @@ def select_export_candidates(
     rows = session.execute(
         text(
             """
+            WITH latest_checks AS (
+                SELECT DISTINCT ON (pc.candidate_id)
+                    pc.candidate_id,
+                    pc.speed_error_code,
+                    pc.speed_failure_reason,
+                    pc.speed_error_text,
+                    pc.speed_endpoint_url,
+                    pc.speed_attempts,
+                    pc.speed_successes
+                FROM proxy_checks AS pc
+                ORDER BY pc.candidate_id, pc.checked_at DESC, pc.id DESC
+            )
             SELECT
                 ps.candidate_id,
                 ps.status,
@@ -36,10 +48,18 @@ def select_export_candidates(
                 c.raw_config,
                 c.family,
                 c.host,
-                c.fingerprint
+                c.fingerprint,
+                lc.speed_error_code,
+                lc.speed_failure_reason,
+                lc.speed_error_text,
+                lc.speed_endpoint_url,
+                lc.speed_attempts,
+                lc.speed_successes
             FROM proxy_state AS ps
             JOIN proxy_candidates AS c
                 ON c.id = ps.candidate_id
+            LEFT JOIN latest_checks AS lc
+                ON lc.candidate_id = ps.candidate_id
             WHERE ps.status = :status
               AND ps.final_score IS NOT NULL
               AND ps.final_score > 0
@@ -69,6 +89,12 @@ def select_export_candidates(
             stability_ratio=row["stability_ratio"],
             latency_ms=row["latency_ms"],
             download_mbps=row["download_mbps"],
+            speed_error_code=row["speed_error_code"],
+            speed_failure_reason=row["speed_failure_reason"],
+            speed_error_text=row["speed_error_text"],
+            speed_endpoint_url=row["speed_endpoint_url"],
+            speed_attempts=int(row["speed_attempts"] or 0),
+            speed_successes=int(row["speed_successes"] or 0),
             geo_confidence=row["geo_confidence"],
             freshness_score=row["freshness_score"],
             last_success_at=row["last_success_at"],
@@ -95,3 +121,71 @@ def fetch_proxy_state_status_counts(session: Session) -> dict[str, int]:
         )
     ).mappings().all()
     return {str(row["status"]): int(row["cnt"]) for row in rows}
+
+
+def fetch_speed_quality_summary(session: Session) -> dict[str, object]:
+    """Return latest-check speed quality counters for debug/export visibility."""
+    totals = session.execute(
+        text(
+            """
+            WITH latest_checks AS (
+                SELECT DISTINCT ON (pc.candidate_id)
+                    pc.candidate_id,
+                    pc.connect_ok,
+                    pc.download_mbps
+                FROM proxy_checks AS pc
+                ORDER BY pc.candidate_id, pc.checked_at DESC, pc.id DESC
+            )
+            SELECT
+                COUNT(*)::int AS latest_checks,
+                COUNT(*) FILTER (WHERE connect_ok = TRUE)::int AS connect_ok,
+                COUNT(*) FILTER (WHERE connect_ok = FALSE)::int AS connect_failed,
+                COUNT(*) FILTER (
+                    WHERE connect_ok = TRUE
+                      AND download_mbps IS NOT NULL
+                )::int AS speed_measured,
+                COUNT(*) FILTER (
+                    WHERE connect_ok = TRUE
+                      AND download_mbps IS NULL
+                )::int AS speed_unavailable
+            FROM latest_checks
+            """
+        )
+    ).mappings().one()
+
+    reason_rows = session.execute(
+        text(
+            """
+            WITH latest_checks AS (
+                SELECT DISTINCT ON (pc.candidate_id)
+                    pc.candidate_id,
+                    pc.connect_ok,
+                    pc.download_mbps,
+                    pc.speed_error_code,
+                    pc.speed_failure_reason
+                FROM proxy_checks AS pc
+                ORDER BY pc.candidate_id, pc.checked_at DESC, pc.id DESC
+            )
+            SELECT
+                COALESCE(speed_failure_reason, speed_error_code, 'speed_not_available') AS reason,
+                COUNT(*)::int AS cnt
+            FROM latest_checks
+            WHERE connect_ok = TRUE
+              AND download_mbps IS NULL
+            GROUP BY reason
+            ORDER BY reason
+            """
+        )
+    ).mappings().all()
+
+    return {
+        "latest_checks": int(totals["latest_checks"] or 0),
+        "connect_ok": int(totals["connect_ok"] or 0),
+        "connect_failed": int(totals["connect_failed"] or 0),
+        "speed_measured": int(totals["speed_measured"] or 0),
+        "speed_unavailable": int(totals["speed_unavailable"] or 0),
+        "speed_unavailable_by_reason": {
+            str(row["reason"]): int(row["cnt"])
+            for row in reason_rows
+        },
+    }
