@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -28,13 +29,25 @@ class ProbeCycleStats:
     succeeded: int = 0
     failed: int = 0
     unsupported: int = 0
+    speed_measured: int = 0
+    speed_unavailable: int = 0
+    speed_failure_reasons: Counter[str] | None = None
 
-    def to_log_extra(self) -> dict[str, int]:
+    def __post_init__(self) -> None:
+        if self.speed_failure_reasons is None:
+            self.speed_failure_reasons = Counter()
+
+    def to_log_extra(self) -> dict[str, int | dict[str, int]]:
+        speed_failure_reasons = self.speed_failure_reasons or Counter()
         return {
             "selected": self.selected,
             "succeeded": self.succeeded,
             "failed": self.failed,
             "unsupported": self.unsupported,
+            "connect_ok": self.succeeded,
+            "speed_measured": self.speed_measured,
+            "speed_unavailable": self.speed_unavailable,
+            "speed_failure_reasons": dict(sorted(speed_failure_reasons.items())),
         }
 
 
@@ -62,7 +75,9 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
             "geo_provider_primary": settings.GEO_PROVIDER_PRIMARY,
             "geo_provider_fallback": settings.GEO_PROVIDER_FALLBACK,
             "geo_request_timeout_seconds": settings.GEO_REQUEST_TIMEOUT_SECONDS,
-            "speed_test_url": settings.SPEED_TEST_URL,
+            "speed_test_urls": settings.speed_test_urls,
+            "speed_test_attempts": settings.SPEED_TEST_ATTEMPTS,
+            "speed_test_timeout": settings.speed_test_timeout,
             "speed_test_max_bytes": settings.SPEED_TEST_MAX_BYTES,
             "speed_test_chunk_size": settings.SPEED_TEST_CHUNK_SIZE,
         },
@@ -77,7 +92,9 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
         connect_timeout_seconds=settings.CONNECT_TIMEOUT_SECONDS,
         read_timeout_seconds=settings.DOWNLOAD_TIMEOUT_SECONDS,
         exit_ip_url=settings.PROBER_EXIT_IP_URL,
-        speed_test_url=settings.SPEED_TEST_URL,
+        speed_test_urls=settings.speed_test_urls,
+        speed_test_attempts=settings.SPEED_TEST_ATTEMPTS,
+        speed_test_timeout=settings.speed_test_timeout,
         speed_test_max_bytes=settings.SPEED_TEST_MAX_BYTES,
         speed_test_chunk_size=settings.SPEED_TEST_CHUNK_SIZE,
     )
@@ -138,6 +155,12 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
                 "connect_ms": result.connect_ms,
                 "first_byte_ms": result.first_byte_ms,
                 "download_mbps": str(result.download_mbps) if result.download_mbps is not None else None,
+                "speed_error_code": result.speed_error_code,
+                "speed_failure_reason": result.speed_failure_reason,
+                "speed_error_text": result.speed_error_text,
+                "speed_endpoint_url": result.speed_endpoint_url,
+                "speed_attempts": result.speed_attempts,
+                "speed_successes": result.speed_successes,
                 "exit_ip": result.exit_ip,
                 "exit_country": exit_country,
                 "geo_match": geo_match,
@@ -169,6 +192,12 @@ def insert_proxy_check(
                 connect_ms,
                 first_byte_ms,
                 download_mbps,
+                speed_error_code,
+                speed_failure_reason,
+                speed_error_text,
+                speed_endpoint_url,
+                speed_attempts,
+                speed_successes,
                 exit_ip,
                 exit_country,
                 geo_match,
@@ -182,6 +211,12 @@ def insert_proxy_check(
                 :connect_ms,
                 :first_byte_ms,
                 :download_mbps,
+                :speed_error_code,
+                :speed_failure_reason,
+                :speed_error_text,
+                :speed_endpoint_url,
+                :speed_attempts,
+                :speed_successes,
                 :exit_ip,
                 :exit_country,
                 :geo_match,
@@ -197,6 +232,12 @@ def insert_proxy_check(
             "connect_ms": result.connect_ms,
             "first_byte_ms": result.first_byte_ms,
             "download_mbps": result.download_mbps,
+            "speed_error_code": result.speed_error_code,
+            "speed_failure_reason": result.speed_failure_reason,
+            "speed_error_text": result.speed_error_text,
+            "speed_endpoint_url": result.speed_endpoint_url,
+            "speed_attempts": result.speed_attempts,
+            "speed_successes": result.speed_successes,
             "exit_ip": result.exit_ip,
             "exit_country": exit_country,
             "geo_match": geo_match,
@@ -209,6 +250,13 @@ def insert_proxy_check(
 def _apply_result_to_stats(stats: ProbeCycleStats, result: ProbeResult) -> None:
     if result.connect_ok:
         stats.succeeded += 1
+        if result.download_mbps is not None:
+            stats.speed_measured += 1
+        else:
+            stats.speed_unavailable += 1
+            reason = result.speed_failure_reason or result.speed_error_code or "speed_not_run"
+            if stats.speed_failure_reasons is not None:
+                stats.speed_failure_reasons[reason] += 1
         return
 
     stats.failed += 1

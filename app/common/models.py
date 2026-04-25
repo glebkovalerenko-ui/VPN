@@ -61,6 +61,12 @@ class ProxyCheck(BaseDTO):
     connect_ms: int | None = None
     first_byte_ms: int | None = None
     download_mbps: Decimal | None = None
+    speed_error_code: str | None = None
+    speed_failure_reason: str | None = None
+    speed_error_text: str | None = None
+    speed_endpoint_url: str | None = None
+    speed_attempts: int = 0
+    speed_successes: int = 0
     exit_ip: IPvAnyAddress | None = None
     exit_country: str | None = None
     geo_match: bool | None = None
@@ -84,4 +90,3 @@ class ProxyState(BaseDTO):
     rank_in_family: int | None = None
     rank_in_country: int | None = None
     updated_at: datetime
-

@@ -91,6 +91,64 @@ docker compose exec pipeline-runner cat /app/output/export_manifest.json
 - `ORCHESTRATOR_STARTUP_DELAY_SECONDS` delays first cycle after container start.
 - `ORCHESTRATOR_EXIT_ON_FAILURE=true` makes runner exit on first failed cycle.
 
+## Speed measurement
+The prober keeps connect/exit-IP success separate from throughput quality. A proxy can be `connect_ok=true` even when speed measurement is unavailable.
+
+Speed testing is deterministic and bounded:
+- `SPEED_TEST_URLS` is a comma-separated primary + fallback endpoint list.
+- `SPEED_TEST_URL` is still supported as a legacy fallback.
+- `SPEED_TEST_ATTEMPTS` controls total bounded attempts; every configured endpoint is tried at least once until up to three successful samples are collected.
+- successful samples are aggregated with median `first_byte_ms` and median `download_mbps`.
+- `SPEED_TEST_CONNECT_TIMEOUT_SECONDS`, `SPEED_TEST_READ_TIMEOUT_SECONDS`, `SPEED_TEST_MAX_BYTES`, and `SPEED_TEST_CHUNK_SIZE` keep each candidate probe bounded.
+
+Default endpoints:
+```dotenv
+SPEED_TEST_URLS=http://cachefly.cachefly.net/1mb.test,https://speed.cloudflare.com/__down?bytes=1048576,https://proof.ovh.net/files/1Mb.dat
+SPEED_TEST_URL=http://cachefly.cachefly.net/1mb.test
+```
+
+When throughput cannot be measured, `proxy_checks` stores speed diagnostics without changing `connect_ok`:
+- `speed_error_code`: aggregate state such as `speed_all_endpoints_failed`;
+- `speed_failure_reason`: dominant underlying reason such as `speed_timeout`, `speed_tls_error`, `speed_http_error`, `speed_empty_body`, `speed_invalid_response`, or `speed_unexpected_error`;
+- `speed_error_text`: bounded per-attempt explanation;
+- `speed_endpoint_url`, `speed_attempts`, `speed_successes`.
+
+`download_mbps=null` now means: connect may have worked, but no valid throughput sample was produced. Check `speed_failure_reason` and `speed_error_text` to distinguish a broken endpoint, TLS/cert failure, timeout, empty body, invalid response, or another technical measurement failure.
+
+Quick speed diagnostics:
+```bash
+docker compose exec -T api sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
+WITH latest_checks AS (
+  SELECT DISTINCT ON (candidate_id)
+    candidate_id, connect_ok, download_mbps, speed_error_code, speed_failure_reason
+  FROM proxy_checks
+  ORDER BY candidate_id, checked_at DESC, id DESC
+)
+SELECT
+  count(*) AS latest_checks,
+  count(*) FILTER (WHERE connect_ok) AS connect_ok,
+  count(*) FILTER (WHERE connect_ok AND download_mbps IS NOT NULL) AS speed_measured,
+  count(*) FILTER (WHERE connect_ok AND download_mbps IS NULL) AS speed_unavailable
+FROM latest_checks;"'
+
+docker compose exec -T api sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
+WITH latest_checks AS (
+  SELECT DISTINCT ON (candidate_id)
+    candidate_id, connect_ok, download_mbps, speed_error_code, speed_failure_reason
+  FROM proxy_checks
+  ORDER BY candidate_id, checked_at DESC, id DESC
+)
+SELECT
+  coalesce(speed_failure_reason, speed_error_code, 'speed_not_available') AS reason,
+  count(*) AS count
+FROM latest_checks
+WHERE connect_ok AND download_mbps IS NULL
+GROUP BY reason
+ORDER BY count DESC, reason;"'
+```
+
+Debug JSON and `export_manifest.json` include a `speed_quality` summary. Each debug item also has `speed_diagnostics` from the latest check for that candidate.
+
 ## Output fallback policy (last-good)
 Exporter keeps strict `active` selection as primary source.
 If current cycle has zero active candidates:
@@ -107,7 +165,8 @@ Exporter now writes two artifact types side-by-side in `output/`:
 TXT stays unchanged and remains the distribution format for clients.
 Debug JSON is for operator analysis and includes:
 - `summary` counters (considered/selected/limits/skip reasons);
-- ordered `items` with `selection_position`, `raw_config`, grouping keys and ranking metrics.
+- `speed_quality` counters for latest checks;
+- ordered `items` with `selection_position`, `raw_config`, grouping keys, ranking metrics, and latest `speed_diagnostics`.
 
 Quick checks (host CLI):
 ```bash

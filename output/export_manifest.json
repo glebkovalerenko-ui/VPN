@@ -1,11 +1,11 @@
 {
-  "active_count": 412,
+  "active_count": 316,
   "considered_by_family": {
-    "black": 103,
-    "white_cidr": 289,
-    "white_sni": 20
+    "black": 65,
+    "white_cidr": 234,
+    "white_sni": 17
   },
-  "considered_candidates_total": 412,
+  "considered_candidates_total": 316,
   "diversity_limits": {
     "max_per_country": 500,
     "max_per_host": 100,
@@ -14,7 +14,7 @@
   },
   "fallback_reason": null,
   "fallback_used": false,
-  "generated_at": "2026-04-25T16:14:46.769022+00:00",
+  "generated_at": "2026-04-25T18:13:19.285364+00:00",
   "limits": {
     "EXPORT_ALL_LIMIT": 10000,
     "EXPORT_BLACK_LIMIT": 5000,
@@ -23,33 +23,34 @@
   },
   "output_files": {
     "ALL-ETALON.txt": {
-      "considered": 412,
+      "considered": 316,
       "limit": 10000,
-      "selected": 412
+      "selected": 316
     },
     "BLACK-ETALON.txt": {
-      "considered": 103,
+      "considered": 65,
       "limit": 5000,
-      "selected": 103
+      "selected": 65
     },
     "WHITE-CIDR-ETALON.txt": {
-      "considered": 289,
+      "considered": 234,
       "limit": 2000,
-      "selected": 289
+      "selected": 234
     },
     "WHITE-SNI-ETALON.txt": {
-      "considered": 20,
+      "considered": 17,
       "limit": 2000,
-      "selected": 20
+      "selected": 17
     }
   },
   "proxy_state_status_counts": {
-    "active": 412,
-    "dead": 326,
-    "degraded": 132
+    "active": 317,
+    "dead": 407,
+    "degraded": 357,
+    "unknown": 32
   },
-  "selected_candidates_total_across_files": 824,
-  "selected_unique_candidates": 412,
+  "selected_candidates_total_across_files": 632,
+  "selected_unique_candidates": 316,
   "sorting": [
     "final_score DESC",
     "stability_ratio DESC NULLS LAST",
@@ -64,5 +65,16 @@
     "requires_non_empty_raw_config": true,
     "requires_positive_final_score": true,
     "status_filter": "active"
+  },
+  "speed_quality": {
+    "connect_failed": 580,
+    "connect_ok": 501,
+    "latest_checks": 1081,
+    "speed_measured": 28,
+    "speed_unavailable": 473,
+    "speed_unavailable_by_reason": {
+      "speed_not_available": 472,
+      "speed_timeout": 1
+    }
   }
 }
