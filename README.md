@@ -5,6 +5,7 @@ Stage 11 turns the repository into a runnable deployment pipeline:
 - automated DB init (`alembic` + source seed);
 - continuous orchestration loop (`fetcher -> parser -> prober -> scorer -> exporter`);
 - `sing-box` bundled inside app container image;
+- shared `output_data` volume between `pipeline-runner` and `api`;
 - optional auto-publication of TXT exports to Git remote.
 
 ## Runtime topology
@@ -51,8 +52,8 @@ curl -s http://127.0.0.1:8000/health
 
 7. Inspect generated output:
 ```bash
-ls -la output
-cat output/export_manifest.json
+docker compose exec pipeline-runner ls -la /app/output
+docker compose exec pipeline-runner cat /app/output/export_manifest.json
 ```
 
 ## Quick start (Windows PowerShell)
@@ -75,13 +76,15 @@ docker compose logs -f pipeline-runner
 4. Check API/output:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
-Get-ChildItem output
-Get-Content output/export_manifest.json
+docker compose exec pipeline-runner ls -la /app/output
+docker compose exec pipeline-runner cat /app/output/export_manifest.json
 ```
 
 ## Environment notes
 - `.env.example` is compose-first and sets `POSTGRES_HOST=db`.
 - For host-local CLI runs (outside Docker), set `POSTGRES_HOST=127.0.0.1`.
+- If local ports are occupied, override `POSTGRES_PORT` and/or `API_PORT` before `docker compose up`.
+- `output/` inside containers is shared via Compose named volume `output_data`.
 - `FETCH_INTERVAL_MINUTES` controls orchestrator cycle interval.
 - `ORCHESTRATOR_STARTUP_DELAY_SECONDS` delays first cycle after container start.
 - `ORCHESTRATOR_EXIT_ON_FAILURE=true` makes runner exit on first failed cycle.

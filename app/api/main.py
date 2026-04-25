@@ -1,4 +1,4 @@
-"""FastAPI entrypoint for Stage 10 minimal HTTP API."""
+"""FastAPI entrypoint for Stage 11 read-only HTTP API."""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Proxy Aggregation API",
-        version="10.0.0",
-        description="Read-only Stage 10 API over proxy_state and output exports.",
+        version="11.0.0",
+        description="Read-only Stage 11 API over proxy_state and output exports.",
         lifespan=lifespan,
     )
     app.include_router(router)
@@ -53,4 +53,3 @@ if __name__ == "__main__":
         port=8000,
         reload=False,
     )
-

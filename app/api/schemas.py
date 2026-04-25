@@ -1,4 +1,4 @@
-"""Pydantic response models for Stage 10 HTTP API."""
+"""Pydantic response models for Stage 11 HTTP API."""
 
 from __future__ import annotations
 
@@ -69,4 +69,3 @@ class StateCandidatesResponse(APIBaseModel):
     min_final_score: Decimal | None = None
     only_positive_score: bool
     items: list[StateCandidateItem]
-

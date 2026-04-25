@@ -1,4 +1,4 @@
-"""Dependency helpers for Stage 10 HTTP API."""
+"""Dependency helpers for Stage 11 HTTP API."""
 
 from __future__ import annotations
 
@@ -37,4 +37,3 @@ def get_output_dir() -> Path:
 def get_manifest_path(output_dir: Path = Depends(get_output_dir)) -> Path:
     """Return absolute path to export manifest JSON file."""
     return (output_dir / MANIFEST_FILE_NAME).resolve()
-
