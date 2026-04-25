@@ -99,6 +99,34 @@ If current cycle has zero active candidates:
 
 If there is no previous non-empty output, exporter writes current (empty) selection and records reason in manifest.
 
+## Debug export artifacts
+Exporter now writes two artifact types side-by-side in `output/`:
+- client-facing TXT exports: `BLACK-ETALON.txt`, `WHITE-CIDR-ETALON.txt`, `WHITE-SNI-ETALON.txt`, `ALL-ETALON.txt`;
+- explainability JSON exports: `BLACK-ETALON-debug.json`, `WHITE-CIDR-ETALON-debug.json`, `WHITE-SNI-ETALON-debug.json`, `ALL-ETALON-debug.json`.
+
+TXT stays unchanged and remains the distribution format for clients.
+Debug JSON is for operator analysis and includes:
+- `summary` counters (considered/selected/limits/skip reasons);
+- ordered `items` with `selection_position`, `raw_config`, grouping keys and ranking metrics.
+
+Quick checks (host CLI):
+```bash
+# list generated export artifacts
+ls -la output
+
+# inspect one debug file
+cat output/BLACK-ETALON-debug.json
+
+# count debug items
+python -c "import json, pathlib; p=pathlib.Path('output/BLACK-ETALON-debug.json'); print(len(json.loads(p.read_text(encoding='utf-8'))['items']))"
+
+# compare TXT line count vs debug items count
+python -c "import json, pathlib; txt=[x.strip() for x in pathlib.Path('output/BLACK-ETALON.txt').read_text(encoding='utf-8').splitlines() if x.strip()]; dbg=json.loads(pathlib.Path('output/BLACK-ETALON-debug.json').read_text(encoding='utf-8'))['items']; print({'txt_lines': len(txt), 'debug_items': len(dbg)})"
+
+# verify 1:1 ordering and positions between TXT and debug JSON
+python -c "import json, pathlib; txt=[x.strip() for x in pathlib.Path('output/BLACK-ETALON.txt').read_text(encoding='utf-8').splitlines() if x.strip()]; items=json.loads(pathlib.Path('output/BLACK-ETALON-debug.json').read_text(encoding='utf-8'))['items']; ok=len(txt)==len(items) and all(items[i]['selection_position']==i+1 and items[i]['raw_config']==txt[i] for i in range(len(items))); print('OK' if ok else 'MISMATCH')"
+```
+
 ## Git publication behavior
 Publication is implemented in `app/publisher/git_publish.py` and is disabled by default (`PUBLISH_ENABLED=false`).
 

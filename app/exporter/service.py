@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,12 @@ from app.common.enums import ProxyStatus, SourceFamily
 from app.common.logging import get_logger
 from app.common.settings import PROJECT_ROOT, Settings, get_settings
 
-from .models import ExportCandidate
+from .models import (
+    ExportCandidate,
+    ExportSelectionResult,
+    ExportSelectionSummary,
+    SelectedExportItem,
+)
 from .selectors import fetch_proxy_state_status_counts, select_export_candidates
 from .writer import write_json_atomic, write_txt_atomic
 
@@ -24,12 +30,22 @@ WHITE_CIDR_FILE = "WHITE-CIDR-ETALON.txt"
 WHITE_SNI_FILE = "WHITE-SNI-ETALON.txt"
 ALL_FILE = "ALL-ETALON.txt"
 MANIFEST_FILE = "export_manifest.json"
+BLACK_DEBUG_FILE = "BLACK-ETALON-debug.json"
+WHITE_CIDR_DEBUG_FILE = "WHITE-CIDR-ETALON-debug.json"
+WHITE_SNI_DEBUG_FILE = "WHITE-SNI-ETALON-debug.json"
+ALL_DEBUG_FILE = "ALL-ETALON-debug.json"
 _OUTPUT_FILES: tuple[str, ...] = (
     BLACK_FILE,
     WHITE_CIDR_FILE,
     WHITE_SNI_FILE,
     ALL_FILE,
 )
+_DEBUG_FILE_BY_EXPORT: dict[str, str] = {
+    BLACK_FILE: BLACK_DEBUG_FILE,
+    WHITE_CIDR_FILE: WHITE_CIDR_DEBUG_FILE,
+    WHITE_SNI_FILE: WHITE_SNI_DEBUG_FILE,
+    ALL_FILE: ALL_DEBUG_FILE,
+}
 
 _UNKNOWN_COUNTRY_GROUP = "__unknown_country__"
 
@@ -96,7 +112,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
         ],
     }
 
-    selections: dict[str, list[ExportCandidate]] = {
+    selection_results: dict[str, ExportSelectionResult] = {
         BLACK_FILE: _apply_diversity_limits(
             by_family[SourceFamily.BLACK.value],
             limit=settings.EXPORT_BLACK_LIMIT,
@@ -125,8 +141,8 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
 
     output_dir = PROJECT_ROOT / "output"
     selected_lines_by_file = {
-        file_name: [candidate.raw_config for candidate in selected_candidates]
-        for file_name, selected_candidates in selections.items()
+        file_name: [candidate.raw_config for candidate in selection_result.selected_candidates]
+        for file_name, selection_result in selection_results.items()
     }
     fallback = _resolve_last_good_fallback(
         output_dir=output_dir,
@@ -145,6 +161,17 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
 
     for file_name, selected_lines in selected_lines_by_file.items():
         write_txt_atomic(output_dir / file_name, selected_lines)
+
+    for export_name, selection_result in selection_results.items():
+        debug_payload = _build_debug_export_payload(
+            generated_at=generated_at,
+            export_name=export_name,
+            selection_result=selection_result,
+            fallback_used=fallback.use_fallback,
+            fallback_reason=fallback.reason,
+            exported_lines_count=len(selected_lines_by_file[export_name]),
+        )
+        write_json_atomic(output_dir / _DEBUG_FILE_BY_EXPORT[export_name], debug_payload)
 
     selected_unique_candidates = len(
         {
@@ -189,36 +216,72 @@ def _apply_diversity_limits(
     limit: int,
     max_per_country: int,
     max_per_host: int,
-) -> list[ExportCandidate]:
+) -> ExportSelectionResult:
     selected: list[ExportCandidate] = []
+    selected_items: list[SelectedExportItem] = []
     seen_raw_configs: set[str] = set()
     country_counts: Counter[str] = Counter()
     host_counts: Counter[str] = Counter()
+    summary = ExportSelectionSummary(
+        considered=len(ordered_candidates),
+        selected=0,
+        limit=limit,
+        max_per_country=max_per_country,
+        max_per_host=max_per_host,
+        dedup_raw_config_skipped=0,
+        country_limit_skipped=0,
+        host_limit_skipped=0,
+        empty_or_invalid_skipped=0,
+        eligible_before_diversity=0,
+        selected_after_diversity=0,
+    )
 
     for candidate in ordered_candidates:
         if len(selected) >= limit:
             break
 
         raw_config = candidate.raw_config.strip()
-        if not raw_config or raw_config in seen_raw_configs:
+        if not raw_config:
+            summary.empty_or_invalid_skipped += 1
+            continue
+        if raw_config in seen_raw_configs:
+            summary.dedup_raw_config_skipped += 1
             continue
         if "\n" in raw_config or "\r" in raw_config:
+            summary.empty_or_invalid_skipped += 1
             continue
 
+        summary.eligible_before_diversity += 1
         country_group = _country_group(candidate.current_country)
         if country_counts[country_group] >= max_per_country:
+            summary.country_limit_skipped += 1
             continue
 
         host_group = _host_group(candidate)
         if host_counts[host_group] >= max_per_host:
+            summary.host_limit_skipped += 1
             continue
 
         selected.append(candidate)
+        selected_items.append(
+            SelectedExportItem(
+                selection_position=len(selected),
+                selection_country_group=country_group,
+                selection_host_group=host_group,
+                candidate=candidate,
+            )
+        )
         seen_raw_configs.add(raw_config)
         country_counts[country_group] += 1
         host_counts[host_group] += 1
 
-    return selected
+    summary.selected = len(selected)
+    summary.selected_after_diversity = len(selected)
+    return ExportSelectionResult(
+        selected_candidates=selected,
+        selected_items=selected_items,
+        summary=summary,
+    )
 
 
 def _resolve_last_good_fallback(
@@ -285,6 +348,79 @@ def _host_group(candidate: ExportCandidate) -> str:
         return f"fingerprint:{fingerprint}"
 
     return f"candidate:{candidate.candidate_id}"
+
+
+def _build_debug_export_payload(
+    *,
+    generated_at: datetime,
+    export_name: str,
+    selection_result: ExportSelectionResult,
+    fallback_used: bool,
+    fallback_reason: str | None,
+    exported_lines_count: int,
+) -> dict[str, Any]:
+    summary = selection_result.summary
+    summary_payload: dict[str, int] = {
+        "considered": summary.considered,
+        "selected": summary.selected,
+        "limit": summary.limit,
+        "max_per_country": summary.max_per_country,
+        "max_per_host": summary.max_per_host,
+        "dedup_raw_config_skipped": summary.dedup_raw_config_skipped,
+        "country_limit_skipped": summary.country_limit_skipped,
+        "host_limit_skipped": summary.host_limit_skipped,
+        "empty_or_invalid_skipped": summary.empty_or_invalid_skipped,
+        "eligible_before_diversity": summary.eligible_before_diversity,
+        "selected_after_diversity": summary.selected_after_diversity,
+    }
+    if fallback_used:
+        summary_payload["exported_lines_count"] = exported_lines_count
+
+    items = [
+        {
+            "selection_position": item.selection_position,
+            "candidate_id": item.candidate.candidate_id,
+            "family": item.candidate.family,
+            "status": item.candidate.status,
+            "raw_config": item.candidate.raw_config,
+            "host": item.candidate.host,
+            "fingerprint": item.candidate.fingerprint,
+            "current_country": item.candidate.current_country,
+            "selection_country_group": item.selection_country_group,
+            "selection_host_group": item.selection_host_group,
+            "final_score": _decimal_to_json_number(item.candidate.final_score),
+            "stability_ratio": _decimal_to_json_number(item.candidate.stability_ratio),
+            "geo_confidence": _decimal_to_json_number(item.candidate.geo_confidence),
+            "freshness_score": _decimal_to_json_number(item.candidate.freshness_score),
+            "latency_ms": item.candidate.latency_ms,
+            "download_mbps": _decimal_to_json_number(item.candidate.download_mbps),
+            "last_success_at": _datetime_to_iso(item.candidate.last_success_at),
+            "rank_global": item.candidate.rank_global,
+            "rank_in_family": item.candidate.rank_in_family,
+            "rank_in_country": item.candidate.rank_in_country,
+        }
+        for item in selection_result.selected_items
+    ]
+    return {
+        "generated_at": generated_at.isoformat(),
+        "export_name": export_name,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "summary": summary_payload,
+        "items": items,
+    }
+
+
+def _decimal_to_json_number(value: Decimal | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _datetime_to_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
 
 
 def _build_manifest(
@@ -365,4 +501,3 @@ def _build_manifest(
         "selected_unique_candidates": selected_unique_candidates,
         "output_files": output_files,
     }
-

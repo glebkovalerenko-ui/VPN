@@ -20,7 +20,47 @@ class ExportCandidate:
     current_country: str | None
     final_score: Decimal
     stability_ratio: Decimal | None
+    latency_ms: int | None
+    download_mbps: Decimal | None
+    geo_confidence: Decimal | None
+    freshness_score: Decimal | None
     last_success_at: datetime | None
     rank_global: int | None
     rank_in_family: int | None
     rank_in_country: int | None
+
+
+@dataclass(slots=True, frozen=True)
+class SelectedExportItem:
+    """Selected candidate enriched with grouping metadata used during selection."""
+
+    selection_position: int
+    selection_country_group: str
+    selection_host_group: str
+    candidate: ExportCandidate
+
+
+@dataclass(slots=True)
+class ExportSelectionSummary:
+    """Explain counters collected while applying diversity limits."""
+
+    considered: int
+    selected: int
+    limit: int
+    max_per_country: int
+    max_per_host: int
+    dedup_raw_config_skipped: int
+    country_limit_skipped: int
+    host_limit_skipped: int
+    empty_or_invalid_skipped: int
+    eligible_before_diversity: int
+    selected_after_diversity: int
+
+
+@dataclass(slots=True, frozen=True)
+class ExportSelectionResult:
+    """Final ordered selection plus explainability metadata."""
+
+    selected_candidates: list[ExportCandidate]
+    selected_items: list[SelectedExportItem]
+    summary: ExportSelectionSummary
