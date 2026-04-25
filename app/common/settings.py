@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     PUBLISH_GIT_AUTHOR_NAME: str = "proxy-mvp-bot"
     PUBLISH_GIT_AUTHOR_EMAIL: str = "proxy-mvp-bot@users.noreply.github.com"
     PUBLISH_COMMIT_MESSAGE_PREFIX: str = "chore(exports): refresh etalon outputs"
+    PUBLISH_AUTH_MODE: str = "auto"
     PUBLISH_PUSH_TIMEOUT_SECONDS: int = Field(default=60, ge=1)
 
     @property
@@ -162,6 +163,7 @@ class Settings(BaseSettings):
             "PUBLISH_GIT_AUTHOR_NAME": self.PUBLISH_GIT_AUTHOR_NAME,
             "PUBLISH_GIT_AUTHOR_EMAIL": self.PUBLISH_GIT_AUTHOR_EMAIL,
             "PUBLISH_COMMIT_MESSAGE_PREFIX": self.PUBLISH_COMMIT_MESSAGE_PREFIX,
+            "PUBLISH_AUTH_MODE": self.PUBLISH_AUTH_MODE,
             "PUBLISH_PUSH_TIMEOUT_SECONDS": self.PUBLISH_PUSH_TIMEOUT_SECONDS,
         }
 

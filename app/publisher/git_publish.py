@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
+from pathlib import Path
 import subprocess
+import tempfile
 
 from app.common.settings import PROJECT_ROOT, Settings, get_settings
 
@@ -77,7 +79,12 @@ def publish_output(app_settings: Settings | None = None) -> PublishResult:
     commit_sha = _run_git(["rev-parse", "HEAD"], timeout_seconds=timeout).stdout.strip() or None
 
     push_refspec = f"HEAD:{settings.PUBLISH_BRANCH}"
-    _run_git(["push", settings.PUBLISH_REMOTE, push_refspec], timeout_seconds=timeout, env=git_env)
+    _push_with_runtime_auth(
+        settings=settings,
+        git_env=git_env,
+        timeout_seconds=timeout,
+        push_refspec=push_refspec,
+    )
 
     return PublishResult(
         enabled=True,
@@ -121,6 +128,95 @@ def _build_git_env(settings: Settings) -> dict[str, str]:
     env["GIT_COMMITTER_EMAIL"] = settings.PUBLISH_GIT_AUTHOR_EMAIL
     env["GIT_TERMINAL_PROMPT"] = "0"
     return env
+
+
+def _push_with_runtime_auth(
+    *,
+    settings: Settings,
+    git_env: dict[str, str],
+    timeout_seconds: int,
+    push_refspec: str,
+) -> None:
+    auth_mode = _normalize_auth_mode(settings.PUBLISH_AUTH_MODE)
+    remote_url = _run_git(
+        ["remote", "get-url", settings.PUBLISH_REMOTE],
+        timeout_seconds=timeout_seconds,
+        env=git_env,
+    ).stdout.strip()
+    https_remote = remote_url.startswith("https://") or remote_url.startswith("http://")
+    token = _resolve_publish_token(auth_mode=auth_mode)
+
+    askpass_path: str | None = None
+    push_env = dict(git_env)
+    try:
+        if auth_mode == "https_token" and not token:
+            raise RuntimeError("Publish auth mode https_token requires GITHUB_TOKEN or GH_TOKEN.")
+        if token and https_remote and auth_mode in ("auto", "https_token"):
+            askpass_path = _create_runtime_askpass_script()
+            push_env["GIT_ASKPASS"] = askpass_path
+            push_env["PUBLISH_HTTPS_TOKEN"] = token
+            push_env.setdefault("PUBLISH_HTTPS_USERNAME", "x-access-token")
+
+        _run_git(
+            ["push", settings.PUBLISH_REMOTE, push_refspec],
+            timeout_seconds=timeout_seconds,
+            env=push_env,
+        )
+    except RuntimeError as exc:
+        if (
+            https_remote
+            and not token
+            and "could not read Username" in str(exc)
+            and auth_mode in ("auto", "https_token")
+        ):
+            raise RuntimeError(
+                "Git push authentication failed for HTTPS remote in non-interactive mode. "
+                "Set GITHUB_TOKEN or GH_TOKEN (or switch to SSH auth)."
+            ) from exc
+        raise
+    finally:
+        if askpass_path:
+            Path(askpass_path).unlink(missing_ok=True)
+        push_env.pop("PUBLISH_HTTPS_TOKEN", None)
+
+
+def _normalize_auth_mode(raw_auth_mode: str) -> str:
+    mode = (raw_auth_mode or "").strip().lower() or "auto"
+    allowed = {"auto", "none", "https_token", "ssh"}
+    if mode not in allowed:
+        raise RuntimeError(
+            f"Unsupported PUBLISH_AUTH_MODE={raw_auth_mode!r}. "
+            "Use one of: auto, none, https_token, ssh."
+        )
+    return mode
+
+
+def _resolve_publish_token(*, auth_mode: str) -> str | None:
+    if auth_mode in {"none", "ssh"}:
+        return None
+
+    for env_key in ("GITHUB_TOKEN", "GH_TOKEN"):
+        token = (os.getenv(env_key) or "").strip()
+        if token:
+            return token
+    return None
+
+
+def _create_runtime_askpass_script() -> str:
+    fd, path = tempfile.mkstemp(prefix="publish-askpass-", suffix=".sh")
+    os.close(fd)
+    script_content = (
+        "#!/bin/sh\n"
+        "prompt=\"$1\"\n"
+        "case \"$prompt\" in\n"
+        "  *Username*|*username*) printf '%s\\n' \"${PUBLISH_HTTPS_USERNAME:-x-access-token}\" ;;\n"
+        "  *Password*|*password*) printf '%s\\n' \"${PUBLISH_HTTPS_TOKEN:-}\" ;;\n"
+        "  *) printf '\\n' ;;\n"
+        "esac\n"
+    )
+    Path(path).write_text(script_content, encoding="utf-8")
+    os.chmod(path, 0o700)
+    return path
 
 
 def _run_git(

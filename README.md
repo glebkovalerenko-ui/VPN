@@ -28,6 +28,8 @@ PUBLISH_REMOTE=origin
 PUBLISH_BRANCH=main
 PUBLISH_GIT_AUTHOR_NAME=proxy-mvp-bot
 PUBLISH_GIT_AUTHOR_EMAIL=proxy-mvp-bot@users.noreply.github.com
+PUBLISH_AUTH_MODE=auto
+GITHUB_TOKEN=ghp_xxx
 ```
 
 3. Start full stack:
@@ -108,6 +110,44 @@ When enabled:
 Required for successful push:
 - valid git remote access from runtime environment;
 - repository credentials/token configured for non-interactive push.
+
+## Production-like publish setup
+Use non-interactive auth for `pipeline-runner`:
+
+```dotenv
+PUBLISH_ENABLED=true
+PUBLISH_REMOTE=origin
+PUBLISH_BRANCH=main
+PUBLISH_AUTH_MODE=auto
+GITHUB_TOKEN=ghp_xxx
+# GH_TOKEN=ghp_xxx (alternative to GITHUB_TOKEN)
+```
+
+Publisher auth modes:
+- `PUBLISH_AUTH_MODE=auto` (default): for HTTPS remotes, tries `GITHUB_TOKEN` then `GH_TOKEN`; for SSH remotes uses standard SSH environment.
+- `PUBLISH_AUTH_MODE=https_token`: requires `GITHUB_TOKEN` or `GH_TOKEN`; fails fast if token is missing.
+- `PUBLISH_AUTH_MODE=ssh`: do not use token auth, rely on SSH remote + mounted key + `GIT_SSH_COMMAND`.
+- `PUBLISH_AUTH_MODE=none`: skip all auth helpers and use plain git environment.
+
+The HTTPS token path uses a temporary runtime `GIT_ASKPASS` helper inside the container (not stored in repo files), so push stays non-interactive.
+
+Smoke check for publication:
+```bash
+docker compose up -d --build
+docker compose exec -T -e PUBLISH_ENABLED=true pipeline-runner python - <<'PY'
+from app.orchestrator.service import run_pipeline_cycle
+print(run_pipeline_cycle().to_log_extra())
+PY
+```
+Then verify:
+- orchestrator logs contain successful publisher step;
+- `git ls-remote --heads origin main` shows updated commit;
+- second publish run without changes returns `no_changes`.
+
+## Security note: do not commit secrets
+- Never commit `.env` with real tokens.
+- Keep `GITHUB_TOKEN` / `GH_TOKEN` only in runtime environment or local `.env` excluded from git.
+- Do not paste `docker compose config` output publicly when it contains runtime secrets.
 
 ## API endpoints
 - `GET /health`

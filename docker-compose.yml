@@ -10,6 +10,10 @@ x-app-common: &app-common
     TZ: ${TZ}
     POSTGRES_HOST: db
     DATABASE_URL: ""
+    PUBLISH_AUTH_MODE: ${PUBLISH_AUTH_MODE:-auto}
+    GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    GH_TOKEN: ${GH_TOKEN:-}
+    GIT_SSH_COMMAND: ${GIT_SSH_COMMAND:-}
   working_dir: /app
   volumes:
     - output_data:/app/output
