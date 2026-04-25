@@ -402,13 +402,33 @@ def _build_debug_export_payload(
             "freshness_score": _decimal_to_json_number(item.candidate.freshness_score),
             "latency_ms": item.candidate.latency_ms,
             "download_mbps": _decimal_to_json_number(item.candidate.download_mbps),
+            "state_download_mbps": _decimal_to_json_number(item.candidate.download_mbps),
+            "state_latency_ms": item.candidate.latency_ms,
+            "state_freshness_score": _decimal_to_json_number(item.candidate.freshness_score),
+            "state_geo_confidence": _decimal_to_json_number(item.candidate.geo_confidence),
+            "latest_check_checked_at": _datetime_to_iso(item.candidate.latest_check_checked_at),
+            "latest_check_connect_ok": item.candidate.latest_check_connect_ok,
+            "latest_check_download_mbps": _decimal_to_json_number(item.candidate.latest_check_download_mbps),
+            "latest_check_first_byte_ms": item.candidate.latest_check_first_byte_ms,
+            "latest_check_speed_attempts": item.candidate.speed_attempts,
+            "latest_check_speed_successes": item.candidate.speed_successes,
+            "latest_check_speed_error_code": item.candidate.speed_error_code,
+            "latest_check_speed_failure_reason": item.candidate.speed_failure_reason,
+            "latest_check_speed_error_text": item.candidate.speed_error_text,
+            "latest_check_speed_endpoint_url": item.candidate.speed_endpoint_url,
+            "latest_check_speed_semantics": _latest_check_speed_semantics(item.candidate),
             "speed_diagnostics": {
+                "checked_at": _datetime_to_iso(item.candidate.latest_check_checked_at),
+                "connect_ok": item.candidate.latest_check_connect_ok,
+                "download_mbps": _decimal_to_json_number(item.candidate.latest_check_download_mbps),
+                "first_byte_ms": item.candidate.latest_check_first_byte_ms,
                 "speed_error_code": item.candidate.speed_error_code,
                 "speed_failure_reason": item.candidate.speed_failure_reason,
                 "speed_error_text": item.candidate.speed_error_text,
                 "speed_endpoint_url": item.candidate.speed_endpoint_url,
                 "speed_attempts": item.candidate.speed_attempts,
                 "speed_successes": item.candidate.speed_successes,
+                "speed_semantics": _latest_check_speed_semantics(item.candidate),
             },
             "last_success_at": _datetime_to_iso(item.candidate.last_success_at),
             "rank_global": item.candidate.rank_global,
@@ -426,6 +446,23 @@ def _build_debug_export_payload(
         "speed_quality": speed_quality_summary,
         "items": items,
     }
+
+
+def _latest_check_speed_semantics(candidate: ExportCandidate) -> str:
+    if candidate.latest_check_checked_at is None:
+        return "missing_latest_check"
+    if candidate.latest_check_connect_ok is False:
+        return "connect_failed"
+    if candidate.latest_check_download_mbps is not None:
+        return "measured"
+    if (
+        candidate.speed_attempts == 0
+        and candidate.speed_successes == 0
+        and candidate.speed_error_code is None
+        and candidate.speed_failure_reason is None
+    ):
+        return "legacy_no_speed_diagnostics"
+    return "diagnosed_unavailable"
 
 
 def _decimal_to_json_number(value: Decimal | None) -> float | None:

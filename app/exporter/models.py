@@ -22,6 +22,10 @@ class ExportCandidate:
     stability_ratio: Decimal | None
     latency_ms: int | None
     download_mbps: Decimal | None
+    latest_check_checked_at: datetime | None
+    latest_check_connect_ok: bool | None
+    latest_check_first_byte_ms: int | None
+    latest_check_download_mbps: Decimal | None
     speed_error_code: str | None
     speed_failure_reason: str | None
     speed_error_text: str | None
