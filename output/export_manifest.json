@@ -1,20 +1,35 @@
 {
-  "active_count": 198,
+  "active_count": 186,
   "considered_by_family": {
     "black": 28,
-    "white_cidr": 146,
-    "white_sni": 24
+    "white_cidr": 158,
+    "white_sni": 0
   },
-  "considered_candidates_total": 198,
+  "considered_candidates_total": 186,
   "diversity_limits": {
-    "max_per_country": 500,
-    "max_per_host": 100,
+    "max_per_country": 2,
+    "max_per_host": 1,
     "null_country_group": "__unknown_country__",
     "null_host_fallback": "fingerprint then candidate_id"
   },
   "fallback_reason": null,
   "fallback_used": false,
-  "generated_at": "2026-04-26T05:20:17.153706+00:00",
+  "generated_at": "2026-04-26T08:40:46.779297+00:00",
+  "hardening_policy": {
+    "geo_is_diagnostic_only": true,
+    "host_group_fallback": "host, then fingerprint, then candidate_id",
+    "max_latency_ms": 3000,
+    "max_per_country": 2,
+    "max_per_host": 1,
+    "min_download_mbps": 2.0,
+    "min_final_score_exclusive": 0.0,
+    "min_freshness_score": 0.75,
+    "require_speed_measurement": true,
+    "requires_enabled_candidates": true,
+    "requires_non_empty_raw_config": true,
+    "requires_positive_final_score": true,
+    "status_filter": "active"
+  },
   "limits": {
     "EXPORT_ALL_LIMIT": 10000,
     "EXPORT_BLACK_LIMIT": 5000,
@@ -23,33 +38,33 @@
   },
   "output_files": {
     "ALL-ETALON.txt": {
-      "considered": 198,
+      "considered": 186,
       "limit": 10000,
-      "selected": 198
+      "selected": 25
     },
     "BLACK-ETALON.txt": {
       "considered": 28,
       "limit": 5000,
-      "selected": 28
+      "selected": 8
     },
     "WHITE-CIDR-ETALON.txt": {
-      "considered": 146,
+      "considered": 158,
       "limit": 2000,
-      "selected": 146
+      "selected": 20
     },
     "WHITE-SNI-ETALON.txt": {
-      "considered": 24,
+      "considered": 0,
       "limit": 2000,
-      "selected": 24
+      "selected": 0
     }
   },
   "proxy_state_status_counts": {
-    "active": 198,
-    "dead": 641,
-    "degraded": 896
+    "active": 186,
+    "dead": 754,
+    "degraded": 1037
   },
-  "selected_candidates_total_across_files": 396,
-  "selected_unique_candidates": 198,
+  "selected_candidates_total_across_files": 53,
+  "selected_unique_candidates": 28,
   "sorting": [
     "final_score DESC",
     "stability_ratio DESC NULLS LAST",
@@ -59,6 +74,7 @@
   "source": {
     "config_source": "proxy_candidates",
     "fallback_policy": "reuse_last_good_when_active_empty",
+    "geo_is_diagnostic_only": true,
     "ranking_source": "proxy_state",
     "requires_enabled_candidates": true,
     "requires_non_empty_raw_config": true,
@@ -66,27 +82,27 @@
     "status_filter": "active"
   },
   "speed_quality": {
-    "connect_failed": 1194,
-    "connect_ok": 541,
-    "latest_checks": 1735,
+    "connect_failed": 1364,
+    "connect_ok": 613,
+    "latest_checks": 1977,
     "legacy_empty_speed_diagnostics": 0,
     "speed_error_code_breakdown": {
-      "speed_all_endpoints_failed": 9,
-      "speed_error_code_null": 1723,
-      "speed_unexpected_error": 3
+      "speed_all_endpoints_failed": 22,
+      "speed_error_code_null": 1950,
+      "speed_unexpected_error": 5
     },
-    "speed_measured": 529,
-    "speed_new_format": 541,
+    "speed_measured": 586,
+    "speed_new_format": 613,
     "speed_semantics_breakdown": {
-      "connect_failed": 1194,
-      "diagnosed_unavailable": 12,
-      "measured": 529
+      "connect_failed": 1364,
+      "diagnosed_unavailable": 27,
+      "measured": 586
     },
-    "speed_unavailable": 12,
+    "speed_unavailable": 27,
     "speed_unavailable_by_reason": {
-      "speed_http_error": 1,
-      "speed_timeout": 8,
-      "speed_unexpected_error": 3
+      "speed_http_error": 4,
+      "speed_timeout": 18,
+      "speed_unexpected_error": 5
     }
   }
 }
