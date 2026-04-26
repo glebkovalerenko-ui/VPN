@@ -1,11 +1,11 @@
 {
-  "active_count": 316,
+  "active_count": 198,
   "considered_by_family": {
-    "black": 65,
-    "white_cidr": 234,
-    "white_sni": 17
+    "black": 28,
+    "white_cidr": 146,
+    "white_sni": 24
   },
-  "considered_candidates_total": 316,
+  "considered_candidates_total": 198,
   "diversity_limits": {
     "max_per_country": 500,
     "max_per_host": 100,
@@ -14,7 +14,7 @@
   },
   "fallback_reason": null,
   "fallback_used": false,
-  "generated_at": "2026-04-25T18:13:19.285364+00:00",
+  "generated_at": "2026-04-26T05:20:17.153706+00:00",
   "limits": {
     "EXPORT_ALL_LIMIT": 10000,
     "EXPORT_BLACK_LIMIT": 5000,
@@ -23,34 +23,33 @@
   },
   "output_files": {
     "ALL-ETALON.txt": {
-      "considered": 316,
+      "considered": 198,
       "limit": 10000,
-      "selected": 316
+      "selected": 198
     },
     "BLACK-ETALON.txt": {
-      "considered": 65,
+      "considered": 28,
       "limit": 5000,
-      "selected": 65
+      "selected": 28
     },
     "WHITE-CIDR-ETALON.txt": {
-      "considered": 234,
+      "considered": 146,
       "limit": 2000,
-      "selected": 234
+      "selected": 146
     },
     "WHITE-SNI-ETALON.txt": {
-      "considered": 17,
+      "considered": 24,
       "limit": 2000,
-      "selected": 17
+      "selected": 24
     }
   },
   "proxy_state_status_counts": {
-    "active": 317,
-    "dead": 407,
-    "degraded": 357,
-    "unknown": 32
+    "active": 198,
+    "dead": 641,
+    "degraded": 896
   },
-  "selected_candidates_total_across_files": 632,
-  "selected_unique_candidates": 316,
+  "selected_candidates_total_across_files": 396,
+  "selected_unique_candidates": 198,
   "sorting": [
     "final_score DESC",
     "stability_ratio DESC NULLS LAST",
@@ -67,14 +66,27 @@
     "status_filter": "active"
   },
   "speed_quality": {
-    "connect_failed": 580,
-    "connect_ok": 501,
-    "latest_checks": 1081,
-    "speed_measured": 28,
-    "speed_unavailable": 473,
+    "connect_failed": 1194,
+    "connect_ok": 541,
+    "latest_checks": 1735,
+    "legacy_empty_speed_diagnostics": 0,
+    "speed_error_code_breakdown": {
+      "speed_all_endpoints_failed": 9,
+      "speed_error_code_null": 1723,
+      "speed_unexpected_error": 3
+    },
+    "speed_measured": 529,
+    "speed_new_format": 541,
+    "speed_semantics_breakdown": {
+      "connect_failed": 1194,
+      "diagnosed_unavailable": 12,
+      "measured": 529
+    },
+    "speed_unavailable": 12,
     "speed_unavailable_by_reason": {
-      "speed_not_available": 472,
-      "speed_timeout": 1
+      "speed_http_error": 1,
+      "speed_timeout": 8,
+      "speed_unexpected_error": 3
     }
   }
 }
