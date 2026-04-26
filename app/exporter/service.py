@@ -21,6 +21,7 @@ from .models import (
     RejectedExportItem,
     SelectedExportItem,
 )
+from .relabel import RelabeledRawLink, build_relabeled_raw_link
 from .selectors import (
     fetch_proxy_state_status_counts,
     fetch_speed_quality_summary,
@@ -156,9 +157,24 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
     }
 
     output_dir = PROJECT_ROOT / "output"
+    selected_relabeled_by_file: dict[str, list[RelabeledRawLink]] = {}
+    rejected_relabeled_by_file: dict[str, list[RelabeledRawLink]] = {}
+    for file_name, selection_result in selection_results.items():
+        selected_relabeled_by_file[file_name] = [
+            build_relabeled_raw_link(item.candidate)
+            for item in selection_result.selected_items
+        ]
+        rejected_relabeled_by_file[file_name] = [
+            build_relabeled_raw_link(item.candidate)
+            for item in selection_result.rejected_items
+        ]
+
     selected_lines_by_file = {
-        file_name: [(candidate.raw_config or "").strip() for candidate in selection_result.selected_candidates]
-        for file_name, selection_result in selection_results.items()
+        file_name: [
+            (relabeled.export_raw_config or "").strip()
+            for relabeled in selected_relabeled_by_file[file_name]
+        ]
+        for file_name in selection_results
     }
     fallback = _resolve_last_good_fallback(
         output_dir=output_dir,
@@ -184,6 +200,8 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
             export_name=export_name,
             export_policy=export_policy,
             selection_result=selection_result,
+            selected_relabeled_links=selected_relabeled_by_file[export_name],
+            rejected_relabeled_links=rejected_relabeled_by_file[export_name],
             fallback_used=fallback.use_fallback,
             fallback_reason=fallback.reason,
             exported_lines_count=len(selected_lines_by_file[export_name]),
@@ -494,6 +512,8 @@ def _build_debug_export_payload(
     export_name: str,
     export_policy: ExportPolicy,
     selection_result: ExportSelectionResult,
+    selected_relabeled_links: list[RelabeledRawLink],
+    rejected_relabeled_links: list[RelabeledRawLink],
     fallback_used: bool,
     fallback_reason: str | None,
     exported_lines_count: int,
@@ -530,9 +550,14 @@ def _build_debug_export_payload(
         summary_payload["exported_lines_count"] = exported_lines_count
 
     items: list[dict[str, Any]] = []
-    for item in selection_result.selected_items:
+    for item, relabeled_link in zip(
+        selection_result.selected_items,
+        selected_relabeled_links,
+        strict=True,
+    ):
         payload = _candidate_debug_payload(
             item.candidate,
+            relabeled_link=relabeled_link,
             selection_country_group=item.selection_country_group,
             selection_host_group=item.selection_host_group,
         )
@@ -549,9 +574,14 @@ def _build_debug_export_payload(
         items.append(payload)
 
     rejected_items: list[dict[str, Any]] = []
-    for rejected in selection_result.rejected_items:
+    for rejected, relabeled_link in zip(
+        selection_result.rejected_items,
+        rejected_relabeled_links,
+        strict=True,
+    ):
         payload = _candidate_debug_payload(
             rejected.candidate,
+            relabeled_link=relabeled_link,
             selection_country_group=rejected.selection_country_group,
             selection_host_group=rejected.selection_host_group,
         )
@@ -601,6 +631,7 @@ def _export_policy_payload(policy: ExportPolicy) -> dict[str, Any]:
 def _candidate_debug_payload(
     candidate: ExportCandidate,
     *,
+    relabeled_link: RelabeledRawLink,
     selection_country_group: str | None,
     selection_host_group: str | None,
 ) -> dict[str, Any]:
@@ -609,7 +640,20 @@ def _candidate_debug_payload(
         "candidate_id": candidate.candidate_id,
         "family": candidate.family,
         "status": candidate.status,
-        "raw_config": candidate.raw_config,
+        "raw_config": relabeled_link.export_raw_config,
+        "source_raw_config": relabeled_link.source_raw_config,
+        "export_raw_config": relabeled_link.export_raw_config,
+        "display_label": relabeled_link.display_label,
+        "label_country": relabeled_link.label_country,
+        "label_flag": relabeled_link.label_flag,
+        "label_group": relabeled_link.label_group,
+        "label_download_mbps": relabeled_link.label_download_mbps,
+        "label_latency_ms": relabeled_link.label_latency_ms,
+        "label_rank_global": relabeled_link.label_rank_global,
+        "label_rank_in_family": relabeled_link.label_rank_in_family,
+        "label_strategy": relabeled_link.label_strategy,
+        "label_error_code": relabeled_link.label_error_code,
+        "label_error_text": relabeled_link.label_error_text,
         "host": candidate.host,
         "fingerprint": candidate.fingerprint,
         "source_country_tag": candidate.source_country_tag,

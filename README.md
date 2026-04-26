@@ -203,7 +203,7 @@ Exporter selection is intentionally stricter than scorer ranking. It first order
 
 If `EXPORT_REQUIRE_SPEED_MEASUREMENT=false`, candidates with missing `state_download_mbps` may pass the speed-availability gate, but measured candidates still have to satisfy `EXPORT_MIN_DOWNLOAD_MBPS`. This switch exists for temporary low-coverage incidents; the default curated policy requires a real speed signal.
 
-The selected TXT files remain client-facing output. The debug JSON files are the operator view and include:
+The selected TXT files remain client-facing output. Exporter now relabels only display names at export-time while preserving connection-critical link parts. The debug JSON files are the operator view and include:
 - `policy`: thresholds used by the exporter;
 - `summary.disabled_candidate_skipped`;
 - `summary.low_final_score_skipped`;
@@ -216,6 +216,28 @@ The selected TXT files remain client-facing output. The debug JSON files are the
 - `summary.legacy_no_speed_semantics_skipped`;
 - `items[].selection_decision` for selected rows;
 - `rejected_items[].selection_decision` for rejected rows.
+
+### Standardized display label format
+Export-time raw-link display label is standardized to:
+`#{N} {FLAG}{CC} {GRP} {SPD} {LAT} #{NF}`
+
+Where:
+- `N` = `rank_global` (`#-` fallback);
+- `FLAG` + `CC` = flag emoji + ISO alpha-2 code from factual `current_country` (`🏳️ZZ` fallback);
+- `GRP` = family short code: `BLK` (`black`), `CIDR` (`white_cidr`), `SNI` (`white_sni`);
+- `SPD` = aggregated `state_download_mbps` compact token like `20.9M` (`NS` fallback);
+- `LAT` = aggregated `state_latency_ms` token like `622ms` (`NAms` fallback);
+- `NF` = `rank_in_family` (`#-` fallback).
+
+Examples:
+- `#13 🇱🇹LT CIDR 20.9M 622ms #13`
+- `#55 🇳🇱NL SNI 20.9M 622ms #1`
+- `#8 🇫🇮FI BLK 32.1M 287ms #2`
+
+Relabeling rules:
+- URL-like schemes (`vless`, `trojan`, `ss`, `hysteria2`, `tuic`, and other URL-like supported schemes): replace URL fragment after `#` with the standardized label;
+- `vmess` base64-json: decode payload, update `ps`, re-encode payload; if payload decode fails, fallback to fragment relabel only;
+- no hardening/scoring/API/publisher behavior changes.
 
 Quick hardening checks:
 ```bash
@@ -295,12 +317,14 @@ Exporter now writes two artifact types side-by-side in `output/`:
 - client-facing TXT exports: `BLACK-ETALON.txt`, `WHITE-CIDR-ETALON.txt`, `WHITE-SNI-ETALON.txt`, `ALL-ETALON.txt`;
 - explainability JSON exports: `BLACK-ETALON-debug.json`, `WHITE-CIDR-ETALON-debug.json`, `WHITE-SNI-ETALON-debug.json`, `ALL-ETALON-debug.json`.
 
-TXT stays unchanged and remains the distribution format for clients.
+TXT remains client-facing distribution format and now contains relabeled raw links with standardized compact display names.
 Debug JSON is for operator analysis and includes:
 - `summary` counters (considered/selected/limits/hardening and diversity skip reasons);
 - `policy` thresholds used by the current exporter run;
 - `speed_quality` counters for latest checks;
-- ordered `items` with `selection_position`, `raw_config`, grouping keys, aggregated `state_*` metrics, and concrete `latest_check_*` diagnostics.
+- ordered `items` with `selection_position`, `display_label`, `source_raw_config`, `export_raw_config`, grouping keys, aggregated `state_*` metrics, and concrete `latest_check_*` diagnostics.
+- explicit label tokens: `label_country`, `label_flag`, `label_group`, `label_download_mbps`, `label_latency_ms`, `label_rank_global`, `label_rank_in_family`, `label_strategy`.
+- optional relabel diagnostics when relabel is skipped/partial: `label_error_code`, `label_error_text`.
 - `rejected_items` with `selection_decision.stage`, `primary_reason`, and all rejection reasons for candidates that did not reach TXT output.
 
 Quick checks (host CLI):
@@ -322,6 +346,12 @@ python -c "import json, pathlib; txt=[x.strip() for x in pathlib.Path('output/BL
 
 # verify 1:1 ordering and positions between TXT and debug JSON
 python -c "import json, pathlib; txt=[x.strip() for x in pathlib.Path('output/BLACK-ETALON.txt').read_text(encoding='utf-8').splitlines() if x.strip()]; items=json.loads(pathlib.Path('output/BLACK-ETALON-debug.json').read_text(encoding='utf-8'))['items']; ok=len(txt)==len(items) and all(items[i]['selection_position']==i+1 and items[i]['raw_config']==txt[i] for i in range(len(items))); print('OK' if ok else 'MISMATCH')"
+
+# validate standardized label format in exported fragments
+python -c "import pathlib,re,urllib.parse as u; p=pathlib.Path('output/ALL-ETALON.txt'); lines=[x.strip() for x in p.read_text(encoding='utf-8').splitlines() if x.strip()]; rx=re.compile(r'^#(?:\\d+|-)\\s+.+\\s+(?:BLK|CIDR|SNI|[A-Z_]+)\\s+(?:NS|\\d+(?:\\.\\d+)?M)\\s+(?:NAms|\\d+ms)\\s+#(?:\\d+|-)$'); bad=[u.unquote(line.split('#',1)[1]) for line in lines if '#' in line and not rx.fullmatch(u.unquote(line.split('#',1)[1]))]; print({'lines':len(lines), 'bad_labels':len(bad), 'sample_bad':bad[:3]})"
+
+# validate debug label fields and source/export diff visibility
+python -c "import json,pathlib; d=json.loads(pathlib.Path('output/ALL-ETALON-debug.json').read_text(encoding='utf-8')); item=(d.get('items') or [{}])[0]; keys=('display_label','source_raw_config','export_raw_config','label_rank_global','label_rank_in_family'); print({k:(k in item) for k in keys}); print({k:item.get(k) for k in keys})"
 ```
 
 ## Git publication behavior
