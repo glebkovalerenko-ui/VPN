@@ -18,6 +18,7 @@ from .models import (
     ExportCandidate,
     ExportSelectionResult,
     ExportSelectionSummary,
+    RejectedExportItem,
     SelectedExportItem,
 )
 from .selectors import (
@@ -91,11 +92,25 @@ class LastGoodFallback:
     lines_by_file: dict[str, list[str]]
 
 
+@dataclass(slots=True, frozen=True)
+class ExportPolicy:
+    """Hardening thresholds applied on top of proxy_state score ranking."""
+
+    max_per_country: int
+    max_per_host: int
+    max_latency_ms: int
+    min_download_mbps: Decimal
+    require_speed_measurement: bool
+    min_freshness_score: Decimal
+    min_final_score_exclusive: Decimal = Decimal("0.0000")
+
+
 def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
     """Run one Stage 9 export cycle using proxy_state as ranking source of truth."""
     settings = app_settings or get_settings()
     generated_at = datetime.now(timezone.utc)
     stats = ExportCycleStats()
+    export_policy = _build_export_policy(settings)
 
     with session_scope(settings) as session:
         eligible_candidates = select_export_candidates(
@@ -121,32 +136,28 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
         BLACK_FILE: _apply_diversity_limits(
             by_family[SourceFamily.BLACK.value],
             limit=settings.EXPORT_BLACK_LIMIT,
-            max_per_country=settings.MAX_PER_COUNTRY,
-            max_per_host=settings.MAX_PER_HOST,
+            policy=export_policy,
         ),
         WHITE_CIDR_FILE: _apply_diversity_limits(
             by_family[SourceFamily.WHITE_CIDR.value],
             limit=settings.EXPORT_WHITE_CIDR_LIMIT,
-            max_per_country=settings.MAX_PER_COUNTRY,
-            max_per_host=settings.MAX_PER_HOST,
+            policy=export_policy,
         ),
         WHITE_SNI_FILE: _apply_diversity_limits(
             by_family[SourceFamily.WHITE_SNI.value],
             limit=settings.EXPORT_WHITE_SNI_LIMIT,
-            max_per_country=settings.MAX_PER_COUNTRY,
-            max_per_host=settings.MAX_PER_HOST,
+            policy=export_policy,
         ),
         ALL_FILE: _apply_diversity_limits(
             eligible_candidates,
             limit=settings.EXPORT_ALL_LIMIT,
-            max_per_country=settings.MAX_PER_COUNTRY,
-            max_per_host=settings.MAX_PER_HOST,
+            policy=export_policy,
         ),
     }
 
     output_dir = PROJECT_ROOT / "output"
     selected_lines_by_file = {
-        file_name: [candidate.raw_config for candidate in selection_result.selected_candidates]
+        file_name: [(candidate.raw_config or "").strip() for candidate in selection_result.selected_candidates]
         for file_name, selection_result in selection_results.items()
     }
     fallback = _resolve_last_good_fallback(
@@ -171,6 +182,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
         debug_payload = _build_debug_export_payload(
             generated_at=generated_at,
             export_name=export_name,
+            export_policy=export_policy,
             selection_result=selection_result,
             fallback_used=fallback.use_fallback,
             fallback_reason=fallback.reason,
@@ -190,6 +202,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
     manifest = _build_manifest(
         generated_at=generated_at,
         settings=settings,
+        export_policy=export_policy,
         active_count=len(eligible_candidates),
         eligible_candidates=eligible_candidates,
         by_family=by_family,
@@ -217,15 +230,26 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
     return stats
 
 
+def _build_export_policy(settings: Settings) -> ExportPolicy:
+    return ExportPolicy(
+        max_per_country=settings.EXPORT_MAX_PER_COUNTRY,
+        max_per_host=settings.EXPORT_MAX_PER_HOST,
+        max_latency_ms=settings.EXPORT_MAX_LATENCY_MS,
+        min_download_mbps=Decimal(str(settings.EXPORT_MIN_DOWNLOAD_MBPS)),
+        require_speed_measurement=settings.EXPORT_REQUIRE_SPEED_MEASUREMENT,
+        min_freshness_score=Decimal(str(settings.EXPORT_MIN_FRESHNESS_SCORE)),
+    )
+
+
 def _apply_diversity_limits(
     ordered_candidates: list[ExportCandidate],
     *,
     limit: int,
-    max_per_country: int,
-    max_per_host: int,
+    policy: ExportPolicy,
 ) -> ExportSelectionResult:
     selected: list[ExportCandidate] = []
     selected_items: list[SelectedExportItem] = []
+    rejected_items: list[RejectedExportItem] = []
     seen_raw_configs: set[str] = set()
     country_counts: Counter[str] = Counter()
     host_counts: Counter[str] = Counter()
@@ -233,8 +257,21 @@ def _apply_diversity_limits(
         considered=len(ordered_candidates),
         selected=0,
         limit=limit,
-        max_per_country=max_per_country,
-        max_per_host=max_per_host,
+        max_per_country=policy.max_per_country,
+        max_per_host=policy.max_per_host,
+        max_latency_ms=policy.max_latency_ms,
+        min_download_mbps=policy.min_download_mbps,
+        require_speed_measurement=policy.require_speed_measurement,
+        min_freshness_score=policy.min_freshness_score,
+        min_final_score_exclusive=policy.min_final_score_exclusive,
+        rejected_before_diversity=0,
+        disabled_candidate_skipped=0,
+        low_final_score_skipped=0,
+        latency_threshold_skipped=0,
+        missing_speed_skipped=0,
+        low_speed_skipped=0,
+        freshness_threshold_skipped=0,
+        legacy_no_speed_semantics_skipped=0,
         dedup_raw_config_skipped=0,
         country_limit_skipped=0,
         host_limit_skipped=0,
@@ -247,26 +284,66 @@ def _apply_diversity_limits(
         if len(selected) >= limit:
             break
 
-        raw_config = candidate.raw_config.strip()
-        if not raw_config:
-            summary.empty_or_invalid_skipped += 1
+        country_group = _country_group(candidate.current_country)
+        host_group = _host_group(candidate)
+        policy_rejection_reasons = _policy_rejection_reasons(candidate, policy)
+        if policy_rejection_reasons:
+            primary_reason = policy_rejection_reasons[0]
+            _increment_summary_rejection_counter(summary, primary_reason, candidate)
+            rejected_items.append(
+                RejectedExportItem(
+                    rejection_stage="hard_policy",
+                    primary_rejection_reason=primary_reason,
+                    rejection_reasons=tuple(policy_rejection_reasons),
+                    selection_country_group=country_group,
+                    selection_host_group=host_group,
+                    candidate=candidate,
+                )
+            )
             continue
+
+        raw_config = (candidate.raw_config or "").strip()
         if raw_config in seen_raw_configs:
             summary.dedup_raw_config_skipped += 1
-            continue
-        if "\n" in raw_config or "\r" in raw_config:
-            summary.empty_or_invalid_skipped += 1
+            rejected_items.append(
+                RejectedExportItem(
+                    rejection_stage="dedup",
+                    primary_rejection_reason="dedup_raw_config",
+                    rejection_reasons=("dedup_raw_config",),
+                    selection_country_group=country_group,
+                    selection_host_group=host_group,
+                    candidate=candidate,
+                )
+            )
             continue
 
         summary.eligible_before_diversity += 1
-        country_group = _country_group(candidate.current_country)
-        if country_counts[country_group] >= max_per_country:
+        if country_counts[country_group] >= policy.max_per_country:
             summary.country_limit_skipped += 1
+            rejected_items.append(
+                RejectedExportItem(
+                    rejection_stage="diversity",
+                    primary_rejection_reason="country_limit",
+                    rejection_reasons=("country_limit",),
+                    selection_country_group=country_group,
+                    selection_host_group=host_group,
+                    candidate=candidate,
+                )
+            )
             continue
 
-        host_group = _host_group(candidate)
-        if host_counts[host_group] >= max_per_host:
+        if host_counts[host_group] >= policy.max_per_host:
             summary.host_limit_skipped += 1
+            rejected_items.append(
+                RejectedExportItem(
+                    rejection_stage="diversity",
+                    primary_rejection_reason="host_limit",
+                    rejection_reasons=("host_limit",),
+                    selection_country_group=country_group,
+                    selection_host_group=host_group,
+                    candidate=candidate,
+                )
+            )
             continue
 
         selected.append(candidate)
@@ -287,8 +364,62 @@ def _apply_diversity_limits(
     return ExportSelectionResult(
         selected_candidates=selected,
         selected_items=selected_items,
+        rejected_items=rejected_items,
         summary=summary,
     )
+
+
+def _policy_rejection_reasons(candidate: ExportCandidate, policy: ExportPolicy) -> list[str]:
+    reasons: list[str] = []
+    raw_config = (candidate.raw_config or "").strip()
+
+    if not candidate.is_enabled:
+        reasons.append("disabled_candidate")
+    if not raw_config or "\n" in raw_config or "\r" in raw_config:
+        reasons.append("empty_or_invalid")
+    if candidate.final_score is None or candidate.final_score <= policy.min_final_score_exclusive:
+        reasons.append("low_final_score")
+
+    if candidate.download_mbps is None:
+        if policy.require_speed_measurement:
+            reasons.append("missing_speed")
+            if _latest_check_speed_semantics(candidate) == "legacy_no_speed_diagnostics":
+                reasons.append("legacy_no_speed_semantics")
+    elif candidate.download_mbps < policy.min_download_mbps:
+        reasons.append("low_speed")
+
+    if candidate.latency_ms is None or candidate.latency_ms > policy.max_latency_ms:
+        reasons.append("latency_threshold")
+    if candidate.freshness_score is None or candidate.freshness_score < policy.min_freshness_score:
+        reasons.append("freshness_threshold")
+
+    return reasons
+
+
+def _increment_summary_rejection_counter(
+    summary: ExportSelectionSummary,
+    primary_reason: str,
+    candidate: ExportCandidate,
+) -> None:
+    summary.rejected_before_diversity += 1
+    if primary_reason == "disabled_candidate":
+        summary.disabled_candidate_skipped += 1
+    elif primary_reason == "empty_or_invalid":
+        summary.empty_or_invalid_skipped += 1
+    elif primary_reason == "low_final_score":
+        summary.low_final_score_skipped += 1
+    elif primary_reason == "missing_speed":
+        summary.missing_speed_skipped += 1
+        if _latest_check_speed_semantics(candidate) == "legacy_no_speed_diagnostics":
+            summary.legacy_no_speed_semantics_skipped += 1
+    elif primary_reason == "legacy_no_speed_semantics":
+        summary.legacy_no_speed_semantics_skipped += 1
+    elif primary_reason == "low_speed":
+        summary.low_speed_skipped += 1
+    elif primary_reason == "latency_threshold":
+        summary.latency_threshold_skipped += 1
+    elif primary_reason == "freshness_threshold":
+        summary.freshness_threshold_skipped += 1
 
 
 def _resolve_last_good_fallback(
@@ -361,6 +492,7 @@ def _build_debug_export_payload(
     *,
     generated_at: datetime,
     export_name: str,
+    export_policy: ExportPolicy,
     selection_result: ExportSelectionResult,
     fallback_used: bool,
     fallback_reason: str | None,
@@ -368,12 +500,25 @@ def _build_debug_export_payload(
     speed_quality_summary: dict[str, object],
 ) -> dict[str, Any]:
     summary = selection_result.summary
-    summary_payload: dict[str, int] = {
+    summary_payload: dict[str, Any] = {
         "considered": summary.considered,
         "selected": summary.selected,
         "limit": summary.limit,
         "max_per_country": summary.max_per_country,
         "max_per_host": summary.max_per_host,
+        "max_latency_ms": summary.max_latency_ms,
+        "min_download_mbps": _decimal_to_json_number(summary.min_download_mbps),
+        "require_speed_measurement": summary.require_speed_measurement,
+        "min_freshness_score": _decimal_to_json_number(summary.min_freshness_score),
+        "min_final_score_exclusive": _decimal_to_json_number(summary.min_final_score_exclusive),
+        "rejected_before_diversity": summary.rejected_before_diversity,
+        "disabled_candidate_skipped": summary.disabled_candidate_skipped,
+        "low_final_score_skipped": summary.low_final_score_skipped,
+        "latency_threshold_skipped": summary.latency_threshold_skipped,
+        "missing_speed_skipped": summary.missing_speed_skipped,
+        "low_speed_skipped": summary.low_speed_skipped,
+        "freshness_threshold_skipped": summary.freshness_threshold_skipped,
+        "legacy_no_speed_semantics_skipped": summary.legacy_no_speed_semantics_skipped,
         "dedup_raw_config_skipped": summary.dedup_raw_config_skipped,
         "country_limit_skipped": summary.country_limit_skipped,
         "host_limit_skipped": summary.host_limit_skipped,
@@ -384,67 +529,157 @@ def _build_debug_export_payload(
     if fallback_used:
         summary_payload["exported_lines_count"] = exported_lines_count
 
-    items = [
-        {
-            "selection_position": item.selection_position,
-            "candidate_id": item.candidate.candidate_id,
-            "family": item.candidate.family,
-            "status": item.candidate.status,
-            "raw_config": item.candidate.raw_config,
-            "host": item.candidate.host,
-            "fingerprint": item.candidate.fingerprint,
-            "current_country": item.candidate.current_country,
-            "selection_country_group": item.selection_country_group,
-            "selection_host_group": item.selection_host_group,
-            "final_score": _decimal_to_json_number(item.candidate.final_score),
-            "stability_ratio": _decimal_to_json_number(item.candidate.stability_ratio),
-            "geo_confidence": _decimal_to_json_number(item.candidate.geo_confidence),
-            "freshness_score": _decimal_to_json_number(item.candidate.freshness_score),
-            "latency_ms": item.candidate.latency_ms,
-            "download_mbps": _decimal_to_json_number(item.candidate.download_mbps),
-            "state_download_mbps": _decimal_to_json_number(item.candidate.download_mbps),
-            "state_latency_ms": item.candidate.latency_ms,
-            "state_freshness_score": _decimal_to_json_number(item.candidate.freshness_score),
-            "state_geo_confidence": _decimal_to_json_number(item.candidate.geo_confidence),
-            "latest_check_checked_at": _datetime_to_iso(item.candidate.latest_check_checked_at),
-            "latest_check_connect_ok": item.candidate.latest_check_connect_ok,
-            "latest_check_download_mbps": _decimal_to_json_number(item.candidate.latest_check_download_mbps),
-            "latest_check_first_byte_ms": item.candidate.latest_check_first_byte_ms,
-            "latest_check_speed_attempts": item.candidate.speed_attempts,
-            "latest_check_speed_successes": item.candidate.speed_successes,
-            "latest_check_speed_error_code": item.candidate.speed_error_code,
-            "latest_check_speed_failure_reason": item.candidate.speed_failure_reason,
-            "latest_check_speed_error_text": item.candidate.speed_error_text,
-            "latest_check_speed_endpoint_url": item.candidate.speed_endpoint_url,
-            "latest_check_speed_semantics": _latest_check_speed_semantics(item.candidate),
-            "speed_diagnostics": {
-                "checked_at": _datetime_to_iso(item.candidate.latest_check_checked_at),
-                "connect_ok": item.candidate.latest_check_connect_ok,
-                "download_mbps": _decimal_to_json_number(item.candidate.latest_check_download_mbps),
-                "first_byte_ms": item.candidate.latest_check_first_byte_ms,
-                "speed_error_code": item.candidate.speed_error_code,
-                "speed_failure_reason": item.candidate.speed_failure_reason,
-                "speed_error_text": item.candidate.speed_error_text,
-                "speed_endpoint_url": item.candidate.speed_endpoint_url,
-                "speed_attempts": item.candidate.speed_attempts,
-                "speed_successes": item.candidate.speed_successes,
-                "speed_semantics": _latest_check_speed_semantics(item.candidate),
-            },
-            "last_success_at": _datetime_to_iso(item.candidate.last_success_at),
-            "rank_global": item.candidate.rank_global,
-            "rank_in_family": item.candidate.rank_in_family,
-            "rank_in_country": item.candidate.rank_in_country,
-        }
-        for item in selection_result.selected_items
-    ]
+    items: list[dict[str, Any]] = []
+    for item in selection_result.selected_items:
+        payload = _candidate_debug_payload(
+            item.candidate,
+            selection_country_group=item.selection_country_group,
+            selection_host_group=item.selection_host_group,
+        )
+        payload.update(
+            {
+                "selection_position": item.selection_position,
+                "selection_decision": {
+                    "decision": "selected",
+                    "reason": "passed_strict_policy_and_diversity_limits",
+                    "passed_policy_checks": _passed_policy_checks(item.candidate, export_policy),
+                },
+            }
+        )
+        items.append(payload)
+
+    rejected_items: list[dict[str, Any]] = []
+    for rejected in selection_result.rejected_items:
+        payload = _candidate_debug_payload(
+            rejected.candidate,
+            selection_country_group=rejected.selection_country_group,
+            selection_host_group=rejected.selection_host_group,
+        )
+        payload.update(
+            {
+                "selection_decision": {
+                    "decision": "rejected",
+                    "stage": rejected.rejection_stage,
+                    "primary_reason": rejected.primary_rejection_reason,
+                    "reasons": list(rejected.rejection_reasons),
+                },
+            }
+        )
+        rejected_items.append(payload)
+
     return {
         "generated_at": generated_at.isoformat(),
         "export_name": export_name,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
+        "policy": _export_policy_payload(export_policy),
         "summary": summary_payload,
         "speed_quality": speed_quality_summary,
         "items": items,
+        "rejected_items": rejected_items,
+    }
+
+
+def _export_policy_payload(policy: ExportPolicy) -> dict[str, Any]:
+    return {
+        "status_filter": ProxyStatus.ACTIVE.value,
+        "requires_enabled_candidates": True,
+        "requires_non_empty_raw_config": True,
+        "requires_positive_final_score": True,
+        "min_final_score_exclusive": _decimal_to_json_number(policy.min_final_score_exclusive),
+        "max_per_country": policy.max_per_country,
+        "max_per_host": policy.max_per_host,
+        "max_latency_ms": policy.max_latency_ms,
+        "min_download_mbps": _decimal_to_json_number(policy.min_download_mbps),
+        "require_speed_measurement": policy.require_speed_measurement,
+        "min_freshness_score": _decimal_to_json_number(policy.min_freshness_score),
+        "host_group_fallback": "host, then fingerprint, then candidate_id",
+        "geo_is_diagnostic_only": True,
+    }
+
+
+def _candidate_debug_payload(
+    candidate: ExportCandidate,
+    *,
+    selection_country_group: str | None,
+    selection_host_group: str | None,
+) -> dict[str, Any]:
+    speed_semantics = _latest_check_speed_semantics(candidate)
+    return {
+        "candidate_id": candidate.candidate_id,
+        "family": candidate.family,
+        "status": candidate.status,
+        "raw_config": candidate.raw_config,
+        "host": candidate.host,
+        "fingerprint": candidate.fingerprint,
+        "source_country_tag": candidate.source_country_tag,
+        "is_enabled": candidate.is_enabled,
+        "current_country": candidate.current_country,
+        "exit_country": candidate.latest_check_exit_country,
+        "geo_match": candidate.latest_check_geo_match,
+        "selection_country_group": selection_country_group,
+        "selection_host_group": selection_host_group,
+        "final_score": _decimal_to_json_number(candidate.final_score),
+        "stability_ratio": _decimal_to_json_number(candidate.stability_ratio),
+        "geo_confidence": _decimal_to_json_number(candidate.geo_confidence),
+        "freshness_score": _decimal_to_json_number(candidate.freshness_score),
+        "latency_ms": candidate.latency_ms,
+        "download_mbps": _decimal_to_json_number(candidate.download_mbps),
+        "state_download_mbps": _decimal_to_json_number(candidate.download_mbps),
+        "state_latency_ms": candidate.latency_ms,
+        "state_freshness_score": _decimal_to_json_number(candidate.freshness_score),
+        "state_geo_confidence": _decimal_to_json_number(candidate.geo_confidence),
+        "latest_check_checked_at": _datetime_to_iso(candidate.latest_check_checked_at),
+        "latest_check_connect_ok": candidate.latest_check_connect_ok,
+        "latest_check_download_mbps": _decimal_to_json_number(candidate.latest_check_download_mbps),
+        "latest_check_first_byte_ms": candidate.latest_check_first_byte_ms,
+        "latest_check_exit_country": candidate.latest_check_exit_country,
+        "latest_check_geo_match": candidate.latest_check_geo_match,
+        "latest_check_speed_attempts": candidate.speed_attempts,
+        "latest_check_speed_successes": candidate.speed_successes,
+        "latest_check_speed_error_code": candidate.speed_error_code,
+        "latest_check_speed_failure_reason": candidate.speed_failure_reason,
+        "latest_check_speed_error_text": candidate.speed_error_text,
+        "latest_check_speed_endpoint_url": candidate.speed_endpoint_url,
+        "latest_check_speed_semantics": speed_semantics,
+        "speed_diagnostics": {
+            "checked_at": _datetime_to_iso(candidate.latest_check_checked_at),
+            "connect_ok": candidate.latest_check_connect_ok,
+            "download_mbps": _decimal_to_json_number(candidate.latest_check_download_mbps),
+            "first_byte_ms": candidate.latest_check_first_byte_ms,
+            "speed_error_code": candidate.speed_error_code,
+            "speed_failure_reason": candidate.speed_failure_reason,
+            "speed_error_text": candidate.speed_error_text,
+            "speed_endpoint_url": candidate.speed_endpoint_url,
+            "speed_attempts": candidate.speed_attempts,
+            "speed_successes": candidate.speed_successes,
+            "speed_semantics": speed_semantics,
+        },
+        "last_success_at": _datetime_to_iso(candidate.last_success_at),
+        "rank_global": candidate.rank_global,
+        "rank_in_family": candidate.rank_in_family,
+        "rank_in_country": candidate.rank_in_country,
+    }
+
+
+def _passed_policy_checks(candidate: ExportCandidate, policy: ExportPolicy) -> dict[str, bool]:
+    return {
+        "enabled_candidate": candidate.is_enabled,
+        "valid_raw_config": bool((candidate.raw_config or "").strip())
+        and "\n" not in (candidate.raw_config or "")
+        and "\r" not in (candidate.raw_config or ""),
+        "positive_final_score": candidate.final_score is not None
+        and candidate.final_score > policy.min_final_score_exclusive,
+        "speed_measurement_available": (
+            candidate.download_mbps is not None if policy.require_speed_measurement else True
+        ),
+        "meets_min_download_mbps": candidate.download_mbps is not None
+        and candidate.download_mbps >= policy.min_download_mbps,
+        "meets_max_latency_ms": candidate.latency_ms is not None
+        and candidate.latency_ms <= policy.max_latency_ms,
+        "meets_min_freshness_score": candidate.freshness_score is not None
+        and candidate.freshness_score >= policy.min_freshness_score,
+        "geo_ignored_for_score_and_selection": True,
     }
 
 
@@ -481,6 +716,7 @@ def _build_manifest(
     *,
     generated_at: datetime,
     settings: Settings,
+    export_policy: ExportPolicy,
     active_count: int,
     eligible_candidates: list[ExportCandidate],
     by_family: dict[str, list[ExportCandidate]],
@@ -526,6 +762,7 @@ def _build_manifest(
             "requires_non_empty_raw_config": True,
             "requires_enabled_candidates": True,
             "fallback_policy": "reuse_last_good_when_active_empty",
+            "geo_is_diagnostic_only": True,
         },
         "sorting": [
             "final_score DESC",
@@ -534,11 +771,12 @@ def _build_manifest(
             "candidate_id ASC",
         ],
         "diversity_limits": {
-            "max_per_country": settings.MAX_PER_COUNTRY,
-            "max_per_host": settings.MAX_PER_HOST,
+            "max_per_country": export_policy.max_per_country,
+            "max_per_host": export_policy.max_per_host,
             "null_country_group": _UNKNOWN_COUNTRY_GROUP,
             "null_host_fallback": "fingerprint then candidate_id",
         },
+        "hardening_policy": _export_policy_payload(export_policy),
         "limits": {
             "EXPORT_BLACK_LIMIT": settings.EXPORT_BLACK_LIMIT,
             "EXPORT_WHITE_CIDR_LIMIT": settings.EXPORT_WHITE_CIDR_LIMIT,

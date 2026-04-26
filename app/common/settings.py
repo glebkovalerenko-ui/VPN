@@ -53,8 +53,12 @@ class Settings(BaseSettings):
     EXPORT_WHITE_CIDR_LIMIT: int = Field(default=2000, ge=1)
     EXPORT_WHITE_SNI_LIMIT: int = Field(default=2000, ge=1)
     EXPORT_ALL_LIMIT: int = Field(default=10000, ge=1)
-    MAX_PER_COUNTRY: int = Field(default=500, ge=1)
-    MAX_PER_HOST: int = Field(default=100, ge=1)
+    EXPORT_MAX_PER_COUNTRY: int = Field(default=2, ge=1)
+    EXPORT_MAX_PER_HOST: int = Field(default=1, ge=1)
+    EXPORT_MAX_LATENCY_MS: int = Field(default=3000, ge=1)
+    EXPORT_MIN_DOWNLOAD_MBPS: float = Field(default=2.0, ge=0)
+    EXPORT_REQUIRE_SPEED_MEASUREMENT: bool = True
+    EXPORT_MIN_FRESHNESS_SCORE: float = Field(default=0.75, ge=0, le=1)
 
     GEO_PROVIDER_PRIMARY: str = "ip-api"
     GEO_PROVIDER_FALLBACK: str = "ipwhois"
@@ -87,7 +91,6 @@ class Settings(BaseSettings):
     SCORER_LATENCY_BAD_MS: int = Field(default=1800, ge=1)
     SCORER_SPEED_GOOD_MBPS: float = Field(default=30.0, ge=0)
     SCORER_SPEED_BAD_MBPS: float = Field(default=1.5, ge=0)
-    SCORER_GEO_NEUTRAL_SCORE: float = Field(default=0.50, ge=0, le=1)
     SCORER_MIN_ACTIVE_FRESHNESS: float = Field(default=0.60, ge=0, le=1)
     SCORER_DEAD_FRESHNESS_MAX: float = Field(default=0.05, ge=0, le=1)
     SCORER_FRESHNESS_PENALTY_WEIGHT: float = Field(default=0.35, ge=0)
@@ -161,8 +164,12 @@ class Settings(BaseSettings):
             "EXPORT_WHITE_CIDR_LIMIT": self.EXPORT_WHITE_CIDR_LIMIT,
             "EXPORT_WHITE_SNI_LIMIT": self.EXPORT_WHITE_SNI_LIMIT,
             "EXPORT_ALL_LIMIT": self.EXPORT_ALL_LIMIT,
-            "MAX_PER_COUNTRY": self.MAX_PER_COUNTRY,
-            "MAX_PER_HOST": self.MAX_PER_HOST,
+            "EXPORT_MAX_PER_COUNTRY": self.EXPORT_MAX_PER_COUNTRY,
+            "EXPORT_MAX_PER_HOST": self.EXPORT_MAX_PER_HOST,
+            "EXPORT_MAX_LATENCY_MS": self.EXPORT_MAX_LATENCY_MS,
+            "EXPORT_MIN_DOWNLOAD_MBPS": self.EXPORT_MIN_DOWNLOAD_MBPS,
+            "EXPORT_REQUIRE_SPEED_MEASUREMENT": self.EXPORT_REQUIRE_SPEED_MEASUREMENT,
+            "EXPORT_MIN_FRESHNESS_SCORE": self.EXPORT_MIN_FRESHNESS_SCORE,
             "GEO_PROVIDER_PRIMARY": self.GEO_PROVIDER_PRIMARY,
             "GEO_PROVIDER_FALLBACK": self.GEO_PROVIDER_FALLBACK,
             "GEO_REQUEST_TIMEOUT_SECONDS": self.GEO_REQUEST_TIMEOUT_SECONDS,
@@ -190,7 +197,6 @@ class Settings(BaseSettings):
             "SCORER_LATENCY_BAD_MS": self.SCORER_LATENCY_BAD_MS,
             "SCORER_SPEED_GOOD_MBPS": self.SCORER_SPEED_GOOD_MBPS,
             "SCORER_SPEED_BAD_MBPS": self.SCORER_SPEED_BAD_MBPS,
-            "SCORER_GEO_NEUTRAL_SCORE": self.SCORER_GEO_NEUTRAL_SCORE,
             "SCORER_MIN_ACTIVE_FRESHNESS": self.SCORER_MIN_ACTIVE_FRESHNESS,
             "SCORER_DEAD_FRESHNESS_MAX": self.SCORER_DEAD_FRESHNESS_MAX,
             "SCORER_FRESHNESS_PENALTY_WEIGHT": self.SCORER_FRESHNESS_PENALTY_WEIGHT,

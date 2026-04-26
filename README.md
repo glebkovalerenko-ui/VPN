@@ -90,6 +90,9 @@ docker compose exec pipeline-runner cat /app/output/export_manifest.json
 - `FETCH_INTERVAL_MINUTES` controls orchestrator cycle interval.
 - `ORCHESTRATOR_STARTUP_DELAY_SECONDS` delays first cycle after container start.
 - `ORCHESTRATOR_EXIT_ON_FAILURE=true` makes runner exit on first failed cycle.
+- Curated export hardening is controlled by `EXPORT_MAX_PER_COUNTRY`, `EXPORT_MAX_PER_HOST`,
+  `EXPORT_MAX_LATENCY_MS`, `EXPORT_MIN_DOWNLOAD_MBPS`, `EXPORT_REQUIRE_SPEED_MEASUREMENT`,
+  and `EXPORT_MIN_FRESHNESS_SCORE`.
 
 ## Speed measurement
 The prober keeps connect/exit-IP success separate from throughput quality. A proxy can be `connect_ok=true` even when speed measurement is unavailable.
@@ -178,6 +181,107 @@ Exporter selection and ranking still use `proxy_state`. Debug JSON is explicit a
 
 The older top-level debug fields `download_mbps`, `latency_ms`, `freshness_score`, `geo_confidence`, and nested `speed_diagnostics` are kept for backward compatibility, but operators should prefer the explicit `state_*` and `latest_check_*` names.
 
+## Scoring and export hardening
+`geo_confidence`, `exit_country`, `source_country_tag`, and `geo_match` are diagnostic-only fields.
+They remain visible in DB/API/debug artifacts, but country expectation no longer contributes to:
+- `proxy_state.final_score`;
+- active/degraded/dead/unknown status calculation;
+- export selection bonus or penalty.
+
+`final_score` is now based on throughput, latency, stability, freshness/status penalties, and missing-speed penalty only. The non-geo scoring weights keep the previous relative balance:
+- throughput: `0.4444`;
+- latency: `0.3333`;
+- stability: `0.2223`.
+
+Exporter selection is intentionally stricter than scorer ranking. It first orders candidates by `proxy_state.final_score`, then applies hard export thresholds:
+- `EXPORT_MAX_PER_COUNTRY=2`: at most two selected configs per `current_country` group;
+- `EXPORT_MAX_PER_HOST=1`: at most one selected config per host; empty host falls back to fingerprint, then candidate id;
+- `EXPORT_MAX_LATENCY_MS=3000`: candidates without latency or above 3000 ms are rejected by default;
+- `EXPORT_REQUIRE_SPEED_MEASUREMENT=true`: candidates with `state_download_mbps=null` are rejected by default;
+- `EXPORT_MIN_DOWNLOAD_MBPS=2.0`: measured speeds below 2 Mbps are rejected;
+- `EXPORT_MIN_FRESHNESS_SCORE=0.75`: stale active candidates are rejected before curated output.
+
+If `EXPORT_REQUIRE_SPEED_MEASUREMENT=false`, candidates with missing `state_download_mbps` may pass the speed-availability gate, but measured candidates still have to satisfy `EXPORT_MIN_DOWNLOAD_MBPS`. This switch exists for temporary low-coverage incidents; the default curated policy requires a real speed signal.
+
+The selected TXT files remain client-facing output. The debug JSON files are the operator view and include:
+- `policy`: thresholds used by the exporter;
+- `summary.disabled_candidate_skipped`;
+- `summary.low_final_score_skipped`;
+- `summary.latency_threshold_skipped`;
+- `summary.missing_speed_skipped`;
+- `summary.low_speed_skipped`;
+- `summary.freshness_threshold_skipped`;
+- `summary.country_limit_skipped`;
+- `summary.host_limit_skipped`;
+- `summary.legacy_no_speed_semantics_skipped`;
+- `items[].selection_decision` for selected rows;
+- `rejected_items[].selection_decision` for rejected rows.
+
+Quick hardening checks:
+```bash
+# runtime line counts
+docker compose exec -T pipeline-runner sh -lc 'wc -l /app/output/*ETALON.txt'
+
+# country distribution in ALL export
+docker compose exec -T pipeline-runner python - <<'PY'
+import json
+from collections import Counter
+from pathlib import Path
+data = json.loads(Path('/app/output/ALL-ETALON-debug.json').read_text(encoding='utf-8'))
+print(Counter(item['selection_country_group'] for item in data['items']).most_common())
+print(data['summary'])
+PY
+
+# host diversity in ALL export
+docker compose exec -T pipeline-runner python - <<'PY'
+import json
+from collections import Counter
+from pathlib import Path
+data = json.loads(Path('/app/output/ALL-ETALON-debug.json').read_text(encoding='utf-8'))
+print(Counter(item['selection_host_group'] for item in data['items']).most_common())
+PY
+
+# latency/speed profile for selected rows
+docker compose exec -T pipeline-runner python - <<'PY'
+import json
+from pathlib import Path
+data = json.loads(Path('/app/output/ALL-ETALON-debug.json').read_text(encoding='utf-8'))
+items = data['items']
+lat = sorted(item['latency_ms'] for item in items if item['latency_ms'] is not None)
+spd = sorted(item['download_mbps'] for item in items if item['download_mbps'] is not None)
+missing_speed = sum(1 for item in items if item['download_mbps'] is None)
+print({'items': len(items), 'missing_speed': missing_speed, 'max_latency': max(lat, default=None), 'min_speed': min(spd, default=None)})
+PY
+
+# prove geo is diagnostic-only for score/selection
+docker compose exec -T pipeline-runner python - <<'PY'
+from dataclasses import replace
+from datetime import datetime, timezone
+from decimal import Decimal
+from app.common.settings import get_settings
+from app.scorer.models import CandidateAggregation
+from app.scorer.scoring import score_candidate_state
+
+settings = get_settings()
+base = CandidateAggregation(
+    candidate_id='00000000-0000-0000-0000-000000000001',
+    family='white_sni',
+    checks_total=3,
+    checks_successful=3,
+    last_check_at=datetime.now(timezone.utc),
+    last_success_at=datetime.now(timezone.utc),
+    current_country='DE',
+    latency_ms=800,
+    download_mbps=Decimal('12.0'),
+    stability_ratio=Decimal('1.0000'),
+    geo_confidence=Decimal('0.0000'),
+)
+high_geo = replace(base, geo_confidence=Decimal('1.0000'))
+print(score_candidate_state(base, settings, scored_at=datetime.now(timezone.utc)).final_score)
+print(score_candidate_state(high_geo, settings, scored_at=datetime.now(timezone.utc)).final_score)
+PY
+```
+
 ## Output fallback policy (last-good)
 Exporter keeps strict `active` selection as primary source.
 If current cycle has zero active candidates:
@@ -193,9 +297,11 @@ Exporter now writes two artifact types side-by-side in `output/`:
 
 TXT stays unchanged and remains the distribution format for clients.
 Debug JSON is for operator analysis and includes:
-- `summary` counters (considered/selected/limits/skip reasons);
+- `summary` counters (considered/selected/limits/hardening and diversity skip reasons);
+- `policy` thresholds used by the current exporter run;
 - `speed_quality` counters for latest checks;
 - ordered `items` with `selection_position`, `raw_config`, grouping keys, aggregated `state_*` metrics, and concrete `latest_check_*` diagnostics.
+- `rejected_items` with `selection_decision.stage`, `primary_reason`, and all rejection reasons for candidates that did not reach TXT output.
 
 Quick checks (host CLI):
 ```bash

@@ -14,10 +14,9 @@ _SCORE_SCALE = Decimal("0.0001")
 _ONE = Decimal("1.0000")
 _ZERO = Decimal("0.0000")
 
-_WEIGHT_THROUGHPUT = Decimal("0.40")
-_WEIGHT_LATENCY = Decimal("0.30")
-_WEIGHT_STABILITY = Decimal("0.20")
-_WEIGHT_GEO = Decimal("0.10")
+_WEIGHT_THROUGHPUT = Decimal("0.4444")
+_WEIGHT_LATENCY = Decimal("0.3333")
+_WEIGHT_STABILITY = Decimal("0.2223")
 
 _STATUS_PENALTIES: dict[ProxyStatus, Decimal] = {
     ProxyStatus.DEGRADED: Decimal("0.1500"),
@@ -62,12 +61,6 @@ def score_candidate_state(
         latency_bad_ms=settings.SCORER_LATENCY_BAD_MS,
     )
     stability_score = _quantize_unit_score(aggregation.stability_ratio or _ZERO)
-    geo_score = _quantize_unit_score(
-        aggregation.geo_confidence
-        if aggregation.geo_confidence is not None
-        else Decimal(str(settings.SCORER_GEO_NEUTRAL_SCORE))
-    )
-
     status = determine_status(
         aggregation=aggregation,
         freshness_score=freshness_score,
@@ -84,7 +77,6 @@ def score_candidate_state(
         (_WEIGHT_THROUGHPUT * throughput_score)
         + (_WEIGHT_LATENCY * latency_score)
         + (_WEIGHT_STABILITY * stability_score)
-        + (_WEIGHT_GEO * geo_score)
     )
     final_score = _quantize_raw_score(base_score - penalties)
 

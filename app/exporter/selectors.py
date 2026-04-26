@@ -26,6 +26,8 @@ def select_export_candidates(
                     pc.connect_ok,
                     pc.first_byte_ms,
                     pc.download_mbps,
+                    pc.exit_country,
+                    pc.geo_match,
                     pc.speed_error_code,
                     pc.speed_failure_reason,
                     pc.speed_error_text,
@@ -53,10 +55,14 @@ def select_export_candidates(
                 c.family,
                 c.host,
                 c.fingerprint,
+                c.source_country_tag,
+                c.is_enabled,
                 lc.checked_at AS latest_check_checked_at,
                 lc.connect_ok AS latest_check_connect_ok,
                 lc.first_byte_ms AS latest_check_first_byte_ms,
                 lc.download_mbps AS latest_check_download_mbps,
+                lc.exit_country AS latest_check_exit_country,
+                lc.geo_match AS latest_check_geo_match,
                 lc.speed_error_code,
                 lc.speed_failure_reason,
                 lc.speed_error_text,
@@ -69,13 +75,8 @@ def select_export_candidates(
             LEFT JOIN latest_checks AS lc
                 ON lc.candidate_id = ps.candidate_id
             WHERE ps.status = :status
-              AND ps.final_score IS NOT NULL
-              AND ps.final_score > 0
-              AND c.is_enabled = TRUE
-              AND c.raw_config IS NOT NULL
-              AND btrim(c.raw_config) <> ''
             ORDER BY
-                ps.final_score DESC,
+                ps.final_score DESC NULLS LAST,
                 ps.stability_ratio DESC NULLS LAST,
                 ps.last_success_at DESC NULLS LAST,
                 ps.candidate_id ASC
@@ -89,9 +90,11 @@ def select_export_candidates(
             candidate_id=str(row["candidate_id"]),
             status=str(row["status"]),
             family=str(row["family"]),
-            raw_config=str(row["raw_config"]).strip(),
+            raw_config=str(row["raw_config"]).strip() if row["raw_config"] is not None else None,
             host=row["host"],
             fingerprint=row["fingerprint"],
+            source_country_tag=row["source_country_tag"],
+            is_enabled=bool(row["is_enabled"]),
             current_country=row["current_country"],
             final_score=row["final_score"],
             stability_ratio=row["stability_ratio"],
@@ -101,6 +104,8 @@ def select_export_candidates(
             latest_check_connect_ok=row["latest_check_connect_ok"],
             latest_check_first_byte_ms=row["latest_check_first_byte_ms"],
             latest_check_download_mbps=row["latest_check_download_mbps"],
+            latest_check_exit_country=row["latest_check_exit_country"],
+            latest_check_geo_match=row["latest_check_geo_match"],
             speed_error_code=row["speed_error_code"],
             speed_failure_reason=row["speed_failure_reason"],
             speed_error_text=row["speed_error_text"],

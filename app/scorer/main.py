@@ -24,7 +24,7 @@ def main() -> int:
             "latency_bad_ms": settings.SCORER_LATENCY_BAD_MS,
             "speed_good_mbps": settings.SCORER_SPEED_GOOD_MBPS,
             "speed_bad_mbps": settings.SCORER_SPEED_BAD_MBPS,
-            "geo_neutral_score": settings.SCORER_GEO_NEUTRAL_SCORE,
+            "geo_scoring": "diagnostic_only",
         },
     )
     stats = run_scorer_cycle(settings)
@@ -34,4 +34,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
