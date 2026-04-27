@@ -56,8 +56,17 @@ class Settings(BaseSettings):
     EXPORT_MAX_PER_COUNTRY: int = Field(default=2, ge=1)
     EXPORT_MAX_PER_HOST: int = Field(default=1, ge=1)
     EXPORT_MAX_LATENCY_MS: int = Field(default=3000, ge=1)
+    EXPORT_MAX_FIRST_BYTE_MS: int = Field(default=2200, ge=1)
     EXPORT_MIN_DOWNLOAD_MBPS: float = Field(default=2.0, ge=0)
     EXPORT_REQUIRE_SPEED_MEASUREMENT: bool = True
+    EXPORT_REQUIRE_LATEST_CHECK_SUCCESS: bool = True
+    EXPORT_MAX_LATEST_CHECK_AGE_MINUTES: int = Field(default=75, ge=1)
+    EXPORT_REQUIRE_LAST_TWO_SUCCESSES: bool = True
+    EXPORT_RECENT_CHECKS_WINDOW: int = Field(default=5, ge=2)
+    EXPORT_MIN_RECENT_SUCCESS_RATIO: float = Field(default=0.80, ge=0, le=1)
+    EXPORT_MIN_USER_TARGET_SUCCESS_RATIO: float = Field(default=0.80, ge=0, le=1)
+    EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS: bool = True
+    EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO: float = Field(default=0.95, ge=0, le=1)
     EXPORT_MIN_FRESHNESS_SCORE: float = Field(default=0.75, ge=0, le=1)
 
     GEO_PROVIDER_PRIMARY: str = "ip-api"
@@ -83,6 +92,16 @@ class Settings(BaseSettings):
     PROBER_BASE_LOCAL_PORT: int = Field(default=39000, ge=0, le=65535)
     PROBER_PROCESS_START_TIMEOUT_SECONDS: int = Field(default=8, ge=1)
     PROBER_EXIT_IP_URL: str = "https://api.ipify.org?format=json"
+    PROBER_MULTIHOST_ENABLED: bool = True
+    PROBER_BASELINE_URLS: str = "https://api.ipify.org?format=json,https://example.com/"
+    PROBER_CRITICAL_URLS: str = "https://www.google.com/generate_204,https://www.cloudflare.com/cdn-cgi/trace"
+    PROBER_SPEED_URLS: str = ""
+    PROBER_MIN_USER_TARGET_SUCCESS_RATIO: float = Field(default=0.80, ge=0, le=1)
+    PROBER_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS: bool = True
+    PROBER_MIN_CRITICAL_TARGET_SUCCESS_RATIO: float = Field(default=0.95, ge=0, le=1)
+    PROBER_MAX_TARGET_FIRST_BYTE_MS: int = Field(default=2200, ge=1)
+    PROBER_MAX_TARGET_LATENCY_MS: int = Field(default=4500, ge=1)
+    PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP: int = Field(default=2, ge=1, le=10)
     PROBER_TEMP_DIR: str | None = None
     SCORER_RECENT_CHECKS_LIMIT: int = Field(default=20, ge=1)
     SCORER_MIN_ACTIVE_STABILITY: float = Field(default=0.75, ge=0, le=1)
@@ -142,6 +161,35 @@ class Settings(BaseSettings):
             self.SPEED_TEST_READ_TIMEOUT_SECONDS,
         )
 
+    @property
+    def prober_baseline_urls(self) -> tuple[str, ...]:
+        """Return bounded baseline target URLs for lightweight connectivity checks."""
+        return self._bounded_urls(
+            self.PROBER_BASELINE_URLS,
+            max_targets=self.PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP,
+        )
+
+    @property
+    def prober_critical_urls(self) -> tuple[str, ...]:
+        """Return bounded critical user target URLs in deterministic order."""
+        return self._bounded_urls(
+            self.PROBER_CRITICAL_URLS,
+            max_targets=self.PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP,
+        )
+
+    @property
+    def prober_speed_urls(self) -> tuple[str, ...]:
+        """Return bounded multi-host speed URLs with legacy fallback to SPEED_TEST_URLS."""
+        configured = _parse_env_list(self.PROBER_SPEED_URLS)
+        if configured:
+            return tuple(configured[: self.PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP])
+        return self.speed_test_urls[: self.PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP]
+
+    @staticmethod
+    def _bounded_urls(raw_value: str, *, max_targets: int) -> tuple[str, ...]:
+        values = _parse_env_list(raw_value)
+        return tuple(values[:max_targets])
+
     def safe_summary(self) -> dict[str, str | int | float | bool]:
         """Return non-sensitive settings summary."""
         return {
@@ -167,8 +215,17 @@ class Settings(BaseSettings):
             "EXPORT_MAX_PER_COUNTRY": self.EXPORT_MAX_PER_COUNTRY,
             "EXPORT_MAX_PER_HOST": self.EXPORT_MAX_PER_HOST,
             "EXPORT_MAX_LATENCY_MS": self.EXPORT_MAX_LATENCY_MS,
+            "EXPORT_MAX_FIRST_BYTE_MS": self.EXPORT_MAX_FIRST_BYTE_MS,
             "EXPORT_MIN_DOWNLOAD_MBPS": self.EXPORT_MIN_DOWNLOAD_MBPS,
             "EXPORT_REQUIRE_SPEED_MEASUREMENT": self.EXPORT_REQUIRE_SPEED_MEASUREMENT,
+            "EXPORT_REQUIRE_LATEST_CHECK_SUCCESS": self.EXPORT_REQUIRE_LATEST_CHECK_SUCCESS,
+            "EXPORT_MAX_LATEST_CHECK_AGE_MINUTES": self.EXPORT_MAX_LATEST_CHECK_AGE_MINUTES,
+            "EXPORT_REQUIRE_LAST_TWO_SUCCESSES": self.EXPORT_REQUIRE_LAST_TWO_SUCCESSES,
+            "EXPORT_RECENT_CHECKS_WINDOW": self.EXPORT_RECENT_CHECKS_WINDOW,
+            "EXPORT_MIN_RECENT_SUCCESS_RATIO": self.EXPORT_MIN_RECENT_SUCCESS_RATIO,
+            "EXPORT_MIN_USER_TARGET_SUCCESS_RATIO": self.EXPORT_MIN_USER_TARGET_SUCCESS_RATIO,
+            "EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS": self.EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS,
+            "EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO": self.EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO,
             "EXPORT_MIN_FRESHNESS_SCORE": self.EXPORT_MIN_FRESHNESS_SCORE,
             "GEO_PROVIDER_PRIMARY": self.GEO_PROVIDER_PRIMARY,
             "GEO_PROVIDER_FALLBACK": self.GEO_PROVIDER_FALLBACK,
@@ -189,6 +246,16 @@ class Settings(BaseSettings):
             "PROBER_BASE_LOCAL_PORT": self.PROBER_BASE_LOCAL_PORT,
             "PROBER_PROCESS_START_TIMEOUT_SECONDS": self.PROBER_PROCESS_START_TIMEOUT_SECONDS,
             "PROBER_EXIT_IP_URL": self.PROBER_EXIT_IP_URL,
+            "PROBER_MULTIHOST_ENABLED": self.PROBER_MULTIHOST_ENABLED,
+            "PROBER_BASELINE_URLS": ",".join(self.prober_baseline_urls),
+            "PROBER_CRITICAL_URLS": ",".join(self.prober_critical_urls),
+            "PROBER_SPEED_URLS": ",".join(self.prober_speed_urls),
+            "PROBER_MIN_USER_TARGET_SUCCESS_RATIO": self.PROBER_MIN_USER_TARGET_SUCCESS_RATIO,
+            "PROBER_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS": self.PROBER_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS,
+            "PROBER_MIN_CRITICAL_TARGET_SUCCESS_RATIO": self.PROBER_MIN_CRITICAL_TARGET_SUCCESS_RATIO,
+            "PROBER_MAX_TARGET_FIRST_BYTE_MS": self.PROBER_MAX_TARGET_FIRST_BYTE_MS,
+            "PROBER_MAX_TARGET_LATENCY_MS": self.PROBER_MAX_TARGET_LATENCY_MS,
+            "PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP": self.PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP,
             "PROBER_TEMP_DIR": self.PROBER_TEMP_DIR or "",
             "SCORER_RECENT_CHECKS_LIMIT": self.SCORER_RECENT_CHECKS_LIMIT,
             "SCORER_MIN_ACTIVE_STABILITY": self.SCORER_MIN_ACTIVE_STABILITY,

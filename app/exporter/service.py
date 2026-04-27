@@ -23,6 +23,7 @@ from .models import (
 )
 from .relabel import RelabeledRawLink, build_relabeled_raw_link
 from .selectors import (
+    fetch_multihost_quality_summary,
     fetch_proxy_state_status_counts,
     fetch_speed_quality_summary,
     select_export_candidates,
@@ -100,8 +101,17 @@ class ExportPolicy:
     max_per_country: int
     max_per_host: int
     max_latency_ms: int
+    max_first_byte_ms: int
     min_download_mbps: Decimal
     require_speed_measurement: bool
+    require_latest_check_success: bool
+    max_latest_check_age_minutes: int
+    require_last_two_successes: bool
+    recent_checks_window: int
+    min_recent_success_ratio: Decimal
+    min_user_target_success_ratio: Decimal
+    require_critical_targets_all_success: bool
+    min_critical_target_success_ratio: Decimal
     min_freshness_score: Decimal
     min_final_score_exclusive: Decimal = Decimal("0.0000")
 
@@ -117,9 +127,16 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
         eligible_candidates = select_export_candidates(
             session,
             status=ProxyStatus.ACTIVE,
+            recent_checks_window=export_policy.recent_checks_window,
         )
         status_counts = fetch_proxy_state_status_counts(session)
         speed_quality_summary = fetch_speed_quality_summary(session)
+        multihost_quality_summary = fetch_multihost_quality_summary(
+            session,
+            min_user_target_success_ratio=float(export_policy.min_user_target_success_ratio),
+            require_critical_targets_all_success=export_policy.require_critical_targets_all_success,
+            min_critical_target_success_ratio=float(export_policy.min_critical_target_success_ratio),
+        )
 
     by_family = {
         SourceFamily.BLACK.value: [
@@ -138,21 +155,25 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
             by_family[SourceFamily.BLACK.value],
             limit=settings.EXPORT_BLACK_LIMIT,
             policy=export_policy,
+            evaluated_at=generated_at,
         ),
         WHITE_CIDR_FILE: _apply_diversity_limits(
             by_family[SourceFamily.WHITE_CIDR.value],
             limit=settings.EXPORT_WHITE_CIDR_LIMIT,
             policy=export_policy,
+            evaluated_at=generated_at,
         ),
         WHITE_SNI_FILE: _apply_diversity_limits(
             by_family[SourceFamily.WHITE_SNI.value],
             limit=settings.EXPORT_WHITE_SNI_LIMIT,
             policy=export_policy,
+            evaluated_at=generated_at,
         ),
         ALL_FILE: _apply_diversity_limits(
             eligible_candidates,
             limit=settings.EXPORT_ALL_LIMIT,
             policy=export_policy,
+            evaluated_at=generated_at,
         ),
     }
 
@@ -206,6 +227,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
             fallback_reason=fallback.reason,
             exported_lines_count=len(selected_lines_by_file[export_name]),
             speed_quality_summary=speed_quality_summary,
+            multihost_quality_summary=multihost_quality_summary,
         )
         write_json_atomic(output_dir / _DEBUG_FILE_BY_EXPORT[export_name], debug_payload)
 
@@ -228,6 +250,7 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
         selected_unique_candidates=selected_unique_candidates,
         status_counts=status_counts,
         speed_quality_summary=speed_quality_summary,
+        multihost_quality_summary=multihost_quality_summary,
         fallback_used=fallback.use_fallback,
         fallback_reason=fallback.reason,
     )
@@ -253,8 +276,17 @@ def _build_export_policy(settings: Settings) -> ExportPolicy:
         max_per_country=settings.EXPORT_MAX_PER_COUNTRY,
         max_per_host=settings.EXPORT_MAX_PER_HOST,
         max_latency_ms=settings.EXPORT_MAX_LATENCY_MS,
+        max_first_byte_ms=settings.EXPORT_MAX_FIRST_BYTE_MS,
         min_download_mbps=Decimal(str(settings.EXPORT_MIN_DOWNLOAD_MBPS)),
         require_speed_measurement=settings.EXPORT_REQUIRE_SPEED_MEASUREMENT,
+        require_latest_check_success=settings.EXPORT_REQUIRE_LATEST_CHECK_SUCCESS,
+        max_latest_check_age_minutes=settings.EXPORT_MAX_LATEST_CHECK_AGE_MINUTES,
+        require_last_two_successes=settings.EXPORT_REQUIRE_LAST_TWO_SUCCESSES,
+        recent_checks_window=settings.EXPORT_RECENT_CHECKS_WINDOW,
+        min_recent_success_ratio=Decimal(str(settings.EXPORT_MIN_RECENT_SUCCESS_RATIO)),
+        min_user_target_success_ratio=Decimal(str(settings.EXPORT_MIN_USER_TARGET_SUCCESS_RATIO)),
+        require_critical_targets_all_success=settings.EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS,
+        min_critical_target_success_ratio=Decimal(str(settings.EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO)),
         min_freshness_score=Decimal(str(settings.EXPORT_MIN_FRESHNESS_SCORE)),
     )
 
@@ -264,6 +296,7 @@ def _apply_diversity_limits(
     *,
     limit: int,
     policy: ExportPolicy,
+    evaluated_at: datetime,
 ) -> ExportSelectionResult:
     selected: list[ExportCandidate] = []
     selected_items: list[SelectedExportItem] = []
@@ -278,17 +311,32 @@ def _apply_diversity_limits(
         max_per_country=policy.max_per_country,
         max_per_host=policy.max_per_host,
         max_latency_ms=policy.max_latency_ms,
+        max_first_byte_ms=policy.max_first_byte_ms,
         min_download_mbps=policy.min_download_mbps,
         require_speed_measurement=policy.require_speed_measurement,
+        require_latest_check_success=policy.require_latest_check_success,
+        max_latest_check_age_minutes=policy.max_latest_check_age_minutes,
+        require_last_two_successes=policy.require_last_two_successes,
+        recent_checks_window=policy.recent_checks_window,
+        min_recent_success_ratio=policy.min_recent_success_ratio,
+        min_user_target_success_ratio=policy.min_user_target_success_ratio,
+        require_critical_targets_all_success=policy.require_critical_targets_all_success,
+        min_critical_target_success_ratio=policy.min_critical_target_success_ratio,
         min_freshness_score=policy.min_freshness_score,
         min_final_score_exclusive=policy.min_final_score_exclusive,
         rejected_before_diversity=0,
         disabled_candidate_skipped=0,
         low_final_score_skipped=0,
-        latency_threshold_skipped=0,
+        latest_check_failed_skipped=0,
+        stale_skipped=0,
         missing_speed_skipped=0,
         low_speed_skipped=0,
+        high_latency_skipped=0,
+        high_first_byte_skipped=0,
         freshness_threshold_skipped=0,
+        unstable_recent_checks_skipped=0,
+        low_user_target_success_ratio_skipped=0,
+        critical_targets_failed_skipped=0,
         legacy_no_speed_semantics_skipped=0,
         dedup_raw_config_skipped=0,
         country_limit_skipped=0,
@@ -304,7 +352,11 @@ def _apply_diversity_limits(
 
         country_group = _country_group(candidate.current_country)
         host_group = _host_group(candidate)
-        policy_rejection_reasons = _policy_rejection_reasons(candidate, policy)
+        policy_rejection_reasons = _policy_rejection_reasons(
+            candidate,
+            policy,
+            evaluated_at=evaluated_at,
+        )
         if policy_rejection_reasons:
             primary_reason = policy_rejection_reasons[0]
             _increment_summary_rejection_counter(summary, primary_reason, candidate)
@@ -387,7 +439,12 @@ def _apply_diversity_limits(
     )
 
 
-def _policy_rejection_reasons(candidate: ExportCandidate, policy: ExportPolicy) -> list[str]:
+def _policy_rejection_reasons(
+    candidate: ExportCandidate,
+    policy: ExportPolicy,
+    *,
+    evaluated_at: datetime,
+) -> list[str]:
     reasons: list[str] = []
     raw_config = (candidate.raw_config or "").strip()
 
@@ -398,20 +455,60 @@ def _policy_rejection_reasons(candidate: ExportCandidate, policy: ExportPolicy) 
     if candidate.final_score is None or candidate.final_score <= policy.min_final_score_exclusive:
         reasons.append("low_final_score")
 
-    if candidate.download_mbps is None:
+    latest_check_failed = (
+        candidate.latest_check_checked_at is None
+        or candidate.latest_check_connect_ok is not True
+    )
+    if policy.require_latest_check_success and latest_check_failed:
+        reasons.append("latest_check_failed")
+
+    if _is_latest_check_stale(
+        latest_check_checked_at=candidate.latest_check_checked_at,
+        evaluated_at=evaluated_at,
+        max_latest_check_age_minutes=policy.max_latest_check_age_minutes,
+    ):
+        reasons.append("stale")
+
+    if candidate.download_mbps is None or candidate.latest_check_download_mbps is None:
         if policy.require_speed_measurement:
             reasons.append("missing_speed")
             if _latest_check_speed_semantics(candidate) == "legacy_no_speed_diagnostics":
                 reasons.append("legacy_no_speed_semantics")
-    elif candidate.download_mbps < policy.min_download_mbps:
+    elif (
+        candidate.download_mbps < policy.min_download_mbps
+        or candidate.latest_check_download_mbps < policy.min_download_mbps
+    ):
         reasons.append("low_speed")
 
-    if candidate.latency_ms is None or candidate.latency_ms > policy.max_latency_ms:
-        reasons.append("latency_threshold")
+    if (
+        candidate.latency_ms is None
+        or candidate.latency_ms > policy.max_latency_ms
+        or candidate.latest_check_connect_ms is None
+        or candidate.latest_check_connect_ms > policy.max_latency_ms
+    ):
+        reasons.append("high_latency")
+    if (
+        candidate.latest_check_first_byte_ms is None
+        or candidate.latest_check_first_byte_ms > policy.max_first_byte_ms
+    ):
+        reasons.append("high_first_byte")
     if candidate.freshness_score is None or candidate.freshness_score < policy.min_freshness_score:
         reasons.append("freshness_threshold")
 
-    return reasons
+    if policy.require_last_two_successes and candidate.latest_two_checks_successful is not True:
+        reasons.append("unstable_recent_checks")
+    if (
+        candidate.recent_checks_success_ratio is None
+        or candidate.recent_checks_success_ratio < policy.min_recent_success_ratio
+    ):
+        reasons.append("unstable_recent_checks")
+
+    if not _passes_multihost_user_ratio(candidate, policy):
+        reasons.append("low_user_target_success_ratio")
+    if not _passes_multihost_critical_policy(candidate, policy):
+        reasons.append("critical_targets_failed")
+
+    return _dedupe_reasons(reasons)
 
 
 def _increment_summary_rejection_counter(
@@ -426,6 +523,10 @@ def _increment_summary_rejection_counter(
         summary.empty_or_invalid_skipped += 1
     elif primary_reason == "low_final_score":
         summary.low_final_score_skipped += 1
+    elif primary_reason == "latest_check_failed":
+        summary.latest_check_failed_skipped += 1
+    elif primary_reason == "stale":
+        summary.stale_skipped += 1
     elif primary_reason == "missing_speed":
         summary.missing_speed_skipped += 1
         if _latest_check_speed_semantics(candidate) == "legacy_no_speed_diagnostics":
@@ -434,10 +535,73 @@ def _increment_summary_rejection_counter(
         summary.legacy_no_speed_semantics_skipped += 1
     elif primary_reason == "low_speed":
         summary.low_speed_skipped += 1
-    elif primary_reason == "latency_threshold":
-        summary.latency_threshold_skipped += 1
+    elif primary_reason == "high_latency":
+        summary.high_latency_skipped += 1
+    elif primary_reason == "high_first_byte":
+        summary.high_first_byte_skipped += 1
     elif primary_reason == "freshness_threshold":
         summary.freshness_threshold_skipped += 1
+    elif primary_reason == "unstable_recent_checks":
+        summary.unstable_recent_checks_skipped += 1
+    elif primary_reason == "low_user_target_success_ratio":
+        summary.low_user_target_success_ratio_skipped += 1
+    elif primary_reason == "critical_targets_failed":
+        summary.critical_targets_failed_skipped += 1
+
+
+def _is_latest_check_stale(
+    *,
+    latest_check_checked_at: datetime | None,
+    evaluated_at: datetime,
+    max_latest_check_age_minutes: int,
+) -> bool:
+    if latest_check_checked_at is None:
+        return True
+    age_seconds = (evaluated_at - latest_check_checked_at).total_seconds()
+    return age_seconds > (max_latest_check_age_minutes * 60)
+
+
+def _passes_multihost_user_ratio(candidate: ExportCandidate, policy: ExportPolicy) -> bool:
+    if candidate.latest_check_connect_ok is not True:
+        return False
+    if candidate.latest_user_targets_total <= 0:
+        return False
+    if candidate.latest_user_targets_success_ratio is None:
+        return False
+    return candidate.latest_user_targets_success_ratio >= policy.min_user_target_success_ratio
+
+
+def _passes_multihost_critical_policy(candidate: ExportCandidate, policy: ExportPolicy) -> bool:
+    if candidate.latest_check_connect_ok is not True:
+        return False
+    if candidate.latest_critical_targets_total <= 0:
+        return True
+    if policy.require_critical_targets_all_success:
+        return candidate.latest_critical_targets_all_success is True
+    ratio = _critical_targets_success_ratio(candidate)
+    if ratio is None:
+        return False
+    return ratio >= policy.min_critical_target_success_ratio
+
+
+def _critical_targets_success_ratio(candidate: ExportCandidate) -> Decimal | None:
+    if candidate.latest_critical_targets_total <= 0:
+        return None
+    return (
+        Decimal(candidate.latest_critical_targets_successful)
+        / Decimal(candidate.latest_critical_targets_total)
+    ).quantize(Decimal("0.0001"))
+
+
+def _dedupe_reasons(reasons: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        if reason in seen:
+            continue
+        deduped.append(reason)
+        seen.add(reason)
+    return deduped
 
 
 def _resolve_last_good_fallback(
@@ -518,6 +682,7 @@ def _build_debug_export_payload(
     fallback_reason: str | None,
     exported_lines_count: int,
     speed_quality_summary: dict[str, object],
+    multihost_quality_summary: dict[str, object],
 ) -> dict[str, Any]:
     summary = selection_result.summary
     summary_payload: dict[str, Any] = {
@@ -527,17 +692,32 @@ def _build_debug_export_payload(
         "max_per_country": summary.max_per_country,
         "max_per_host": summary.max_per_host,
         "max_latency_ms": summary.max_latency_ms,
+        "max_first_byte_ms": summary.max_first_byte_ms,
         "min_download_mbps": _decimal_to_json_number(summary.min_download_mbps),
         "require_speed_measurement": summary.require_speed_measurement,
+        "require_latest_check_success": summary.require_latest_check_success,
+        "max_latest_check_age_minutes": summary.max_latest_check_age_minutes,
+        "require_last_two_successes": summary.require_last_two_successes,
+        "recent_checks_window": summary.recent_checks_window,
+        "min_recent_success_ratio": _decimal_to_json_number(summary.min_recent_success_ratio),
+        "min_user_target_success_ratio": _decimal_to_json_number(summary.min_user_target_success_ratio),
+        "require_critical_targets_all_success": summary.require_critical_targets_all_success,
+        "min_critical_target_success_ratio": _decimal_to_json_number(summary.min_critical_target_success_ratio),
         "min_freshness_score": _decimal_to_json_number(summary.min_freshness_score),
         "min_final_score_exclusive": _decimal_to_json_number(summary.min_final_score_exclusive),
         "rejected_before_diversity": summary.rejected_before_diversity,
         "disabled_candidate_skipped": summary.disabled_candidate_skipped,
         "low_final_score_skipped": summary.low_final_score_skipped,
-        "latency_threshold_skipped": summary.latency_threshold_skipped,
+        "latest_check_failed_skipped": summary.latest_check_failed_skipped,
+        "stale_skipped": summary.stale_skipped,
         "missing_speed_skipped": summary.missing_speed_skipped,
         "low_speed_skipped": summary.low_speed_skipped,
+        "high_latency_skipped": summary.high_latency_skipped,
+        "high_first_byte_skipped": summary.high_first_byte_skipped,
         "freshness_threshold_skipped": summary.freshness_threshold_skipped,
+        "unstable_recent_checks_skipped": summary.unstable_recent_checks_skipped,
+        "low_user_target_success_ratio_skipped": summary.low_user_target_success_ratio_skipped,
+        "critical_targets_failed_skipped": summary.critical_targets_failed_skipped,
         "legacy_no_speed_semantics_skipped": summary.legacy_no_speed_semantics_skipped,
         "dedup_raw_config_skipped": summary.dedup_raw_config_skipped,
         "country_limit_skipped": summary.country_limit_skipped,
@@ -567,7 +747,13 @@ def _build_debug_export_payload(
                 "selection_decision": {
                     "decision": "selected",
                     "reason": "passed_strict_policy_and_diversity_limits",
-                    "passed_policy_checks": _passed_policy_checks(item.candidate, export_policy),
+                    "passed_policy_checks": _passed_policy_checks(
+                        item.candidate,
+                        export_policy,
+                        evaluated_at=generated_at,
+                    ),
+                    "passed_multihost_policy": _passes_multihost_user_ratio(item.candidate, export_policy)
+                    and _passes_multihost_critical_policy(item.candidate, export_policy),
                 },
             }
         )
@@ -597,6 +783,15 @@ def _build_debug_export_payload(
         )
         rejected_items.append(payload)
 
+    top_rejection_reasons = Counter(
+        rejected.primary_rejection_reason
+        for rejected in selection_result.rejected_items
+    )
+    summary_payload["top_rejection_reasons"] = [
+        {"reason": reason, "count": count}
+        for reason, count in top_rejection_reasons.most_common(10)
+    ]
+
     return {
         "generated_at": generated_at.isoformat(),
         "export_name": export_name,
@@ -605,6 +800,7 @@ def _build_debug_export_payload(
         "policy": _export_policy_payload(export_policy),
         "summary": summary_payload,
         "speed_quality": speed_quality_summary,
+        "multihost_quality": multihost_quality_summary,
         "items": items,
         "rejected_items": rejected_items,
     }
@@ -619,10 +815,23 @@ def _export_policy_payload(policy: ExportPolicy) -> dict[str, Any]:
         "min_final_score_exclusive": _decimal_to_json_number(policy.min_final_score_exclusive),
         "max_per_country": policy.max_per_country,
         "max_per_host": policy.max_per_host,
+        "require_latest_check_success": policy.require_latest_check_success,
+        "max_latest_check_age_minutes": policy.max_latest_check_age_minutes,
         "max_latency_ms": policy.max_latency_ms,
+        "max_first_byte_ms": policy.max_first_byte_ms,
         "min_download_mbps": _decimal_to_json_number(policy.min_download_mbps),
         "require_speed_measurement": policy.require_speed_measurement,
+        "require_last_two_successes": policy.require_last_two_successes,
+        "recent_checks_window": policy.recent_checks_window,
+        "min_recent_success_ratio": _decimal_to_json_number(policy.min_recent_success_ratio),
+        "min_user_target_success_ratio": _decimal_to_json_number(policy.min_user_target_success_ratio),
+        "require_critical_targets_all_success": policy.require_critical_targets_all_success,
+        "min_critical_target_success_ratio": _decimal_to_json_number(policy.min_critical_target_success_ratio),
         "min_freshness_score": _decimal_to_json_number(policy.min_freshness_score),
+        "eligibility_vs_ranking": {
+            "eligibility": "hard_gates",
+            "ranking": "final_score_within_eligible",
+        },
         "host_group_fallback": "host, then fingerprint, then candidate_id",
         "geo_is_diagnostic_only": True,
     }
@@ -636,6 +845,7 @@ def _candidate_debug_payload(
     selection_host_group: str | None,
 ) -> dict[str, Any]:
     speed_semantics = _latest_check_speed_semantics(candidate)
+    critical_ratio = _critical_targets_success_ratio(candidate)
     return {
         "candidate_id": candidate.candidate_id,
         "family": candidate.family,
@@ -675,10 +885,30 @@ def _candidate_debug_payload(
         "state_geo_confidence": _decimal_to_json_number(candidate.geo_confidence),
         "latest_check_checked_at": _datetime_to_iso(candidate.latest_check_checked_at),
         "latest_check_connect_ok": candidate.latest_check_connect_ok,
+        "latest_check_connect_ms": candidate.latest_check_connect_ms,
         "latest_check_download_mbps": _decimal_to_json_number(candidate.latest_check_download_mbps),
         "latest_check_first_byte_ms": candidate.latest_check_first_byte_ms,
         "latest_check_exit_country": candidate.latest_check_exit_country,
         "latest_check_geo_match": candidate.latest_check_geo_match,
+        "latest_user_targets_total": candidate.latest_user_targets_total,
+        "latest_user_targets_successful": candidate.latest_user_targets_successful,
+        "latest_user_targets_success_ratio": _decimal_to_json_number(
+            candidate.latest_user_targets_success_ratio
+        ),
+        "latest_critical_targets_total": candidate.latest_critical_targets_total,
+        "latest_critical_targets_successful": candidate.latest_critical_targets_successful,
+        "latest_critical_targets_success_ratio": _decimal_to_json_number(critical_ratio),
+        "latest_critical_targets_all_success": candidate.latest_critical_targets_all_success,
+        "latest_multihost_failure_reason": candidate.latest_multihost_failure_reason,
+        "latest_multihost_summary": candidate.latest_multihost_summary,
+        "passed_multihost_policy": (
+            candidate.latest_user_targets_total > 0
+            and candidate.latest_multihost_failure_reason is None
+        ),
+        "recent_checks_total": candidate.recent_checks_total,
+        "recent_checks_successful": candidate.recent_checks_successful,
+        "recent_checks_success_ratio": _decimal_to_json_number(candidate.recent_checks_success_ratio),
+        "latest_two_checks_successful": candidate.latest_two_checks_successful,
         "latest_check_speed_attempts": candidate.speed_attempts,
         "latest_check_speed_successes": candidate.speed_successes,
         "latest_check_speed_error_code": candidate.speed_error_code,
@@ -706,7 +936,15 @@ def _candidate_debug_payload(
     }
 
 
-def _passed_policy_checks(candidate: ExportCandidate, policy: ExportPolicy) -> dict[str, bool]:
+def _passed_policy_checks(
+    candidate: ExportCandidate,
+    policy: ExportPolicy,
+    *,
+    evaluated_at: datetime,
+) -> dict[str, bool]:
+    critical_ratio = _critical_targets_success_ratio(candidate)
+    critical_policy_passed = _passes_multihost_critical_policy(candidate, policy)
+    user_policy_passed = _passes_multihost_user_ratio(candidate, policy)
     return {
         "enabled_candidate": candidate.is_enabled,
         "valid_raw_config": bool((candidate.raw_config or "").strip())
@@ -714,15 +952,47 @@ def _passed_policy_checks(candidate: ExportCandidate, policy: ExportPolicy) -> d
         and "\r" not in (candidate.raw_config or ""),
         "positive_final_score": candidate.final_score is not None
         and candidate.final_score > policy.min_final_score_exclusive,
+        "latest_check_successful": candidate.latest_check_connect_ok is True,
+        "latest_check_is_fresh": not _is_latest_check_stale(
+            latest_check_checked_at=candidate.latest_check_checked_at,
+            evaluated_at=evaluated_at,
+            max_latest_check_age_minutes=policy.max_latest_check_age_minutes,
+        ),
         "speed_measurement_available": (
-            candidate.download_mbps is not None if policy.require_speed_measurement else True
+            candidate.download_mbps is not None and candidate.latest_check_download_mbps is not None
+            if policy.require_speed_measurement
+            else True
         ),
         "meets_min_download_mbps": candidate.download_mbps is not None
-        and candidate.download_mbps >= policy.min_download_mbps,
+        and candidate.latest_check_download_mbps is not None
+        and candidate.download_mbps >= policy.min_download_mbps
+        and candidate.latest_check_download_mbps >= policy.min_download_mbps,
         "meets_max_latency_ms": candidate.latency_ms is not None
-        and candidate.latency_ms <= policy.max_latency_ms,
+        and candidate.latest_check_connect_ms is not None
+        and candidate.latency_ms <= policy.max_latency_ms
+        and candidate.latest_check_connect_ms <= policy.max_latency_ms,
+        "meets_max_first_byte_ms": candidate.latest_check_first_byte_ms is not None
+        and candidate.latest_check_first_byte_ms <= policy.max_first_byte_ms,
         "meets_min_freshness_score": candidate.freshness_score is not None
         and candidate.freshness_score >= policy.min_freshness_score,
+        "latest_two_checks_successful": (
+            candidate.latest_two_checks_successful is True
+            if policy.require_last_two_successes
+            else True
+        ),
+        "recent_success_ratio_ok": candidate.recent_checks_success_ratio is not None
+        and candidate.recent_checks_success_ratio >= policy.min_recent_success_ratio,
+        "multihost_user_ratio_ok": user_policy_passed,
+        "critical_targets_policy_ok": critical_policy_passed,
+        "critical_targets_success_ratio": (
+            True
+            if candidate.latest_critical_targets_total <= 0
+            else (
+                critical_ratio is not None
+                and critical_ratio >= policy.min_critical_target_success_ratio
+            )
+        ),
+        "passed_multihost_policy": user_policy_passed and critical_policy_passed,
         "geo_ignored_for_score_and_selection": True,
     }
 
@@ -768,6 +1038,7 @@ def _build_manifest(
     selected_unique_candidates: int,
     status_counts: dict[str, int],
     speed_quality_summary: dict[str, object],
+    multihost_quality_summary: dict[str, object],
     fallback_used: bool,
     fallback_reason: str | None,
 ) -> dict[str, Any]:
@@ -801,6 +1072,7 @@ def _build_manifest(
         "source": {
             "ranking_source": "proxy_state",
             "config_source": "proxy_candidates",
+            "eligibility_source": "exporter_hard_policy",
             "status_filter": ProxyStatus.ACTIVE.value,
             "requires_positive_final_score": True,
             "requires_non_empty_raw_config": True,
@@ -835,6 +1107,7 @@ def _build_manifest(
         },
         "proxy_state_status_counts": status_counts,
         "speed_quality": speed_quality_summary,
+        "multihost_quality": multihost_quality_summary,
         "selected_candidates_total_across_files": sum(len(items) for items in selected_lines_by_file.values()),
         "selected_unique_candidates": selected_unique_candidates,
         "output_files": output_files,

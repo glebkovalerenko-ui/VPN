@@ -67,6 +67,14 @@ class ProxyCheck(BaseDTO):
     speed_endpoint_url: str | None = None
     speed_attempts: int = 0
     speed_successes: int = 0
+    user_targets_total: int = 0
+    user_targets_successful: int = 0
+    user_targets_success_ratio: Decimal | None = None
+    critical_targets_total: int = 0
+    critical_targets_successful: int = 0
+    critical_targets_all_success: bool = True
+    multihost_failure_reason: str | None = None
+    multihost_summary: dict[str, object] | None = None
     exit_ip: IPvAnyAddress | None = None
     exit_country: str | None = None
     geo_match: bool | None = None

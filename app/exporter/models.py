@@ -26,16 +26,29 @@ class ExportCandidate:
     download_mbps: Decimal | None
     latest_check_checked_at: datetime | None
     latest_check_connect_ok: bool | None
+    latest_check_connect_ms: int | None
     latest_check_first_byte_ms: int | None
     latest_check_download_mbps: Decimal | None
     latest_check_exit_country: str | None
     latest_check_geo_match: bool | None
+    latest_user_targets_total: int
+    latest_user_targets_successful: int
+    latest_user_targets_success_ratio: Decimal | None
+    latest_critical_targets_total: int
+    latest_critical_targets_successful: int
+    latest_critical_targets_all_success: bool | None
+    latest_multihost_failure_reason: str | None
+    latest_multihost_summary: dict[str, object] | None
     speed_error_code: str | None
     speed_failure_reason: str | None
     speed_error_text: str | None
     speed_endpoint_url: str | None
     speed_attempts: int
     speed_successes: int
+    recent_checks_total: int
+    recent_checks_successful: int
+    recent_checks_success_ratio: Decimal | None
+    latest_two_checks_successful: bool | None
     geo_confidence: Decimal | None
     freshness_score: Decimal | None
     last_success_at: datetime | None
@@ -78,15 +91,30 @@ class ExportSelectionSummary:
     max_latency_ms: int
     min_download_mbps: Decimal
     require_speed_measurement: bool
+    require_latest_check_success: bool
+    max_latest_check_age_minutes: int
+    max_first_byte_ms: int
+    require_last_two_successes: bool
+    recent_checks_window: int
+    min_recent_success_ratio: Decimal
+    min_user_target_success_ratio: Decimal
+    require_critical_targets_all_success: bool
+    min_critical_target_success_ratio: Decimal
     min_freshness_score: Decimal
     min_final_score_exclusive: Decimal
     rejected_before_diversity: int
     disabled_candidate_skipped: int
     low_final_score_skipped: int
-    latency_threshold_skipped: int
+    latest_check_failed_skipped: int
+    stale_skipped: int
     missing_speed_skipped: int
     low_speed_skipped: int
+    high_latency_skipped: int
+    high_first_byte_skipped: int
     freshness_threshold_skipped: int
+    unstable_recent_checks_skipped: int
+    low_user_target_success_ratio_skipped: int
+    critical_targets_failed_skipped: int
     legacy_no_speed_semantics_skipped: int
     dedup_raw_config_skipped: int
     country_limit_skipped: int

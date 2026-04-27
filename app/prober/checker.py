@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import ipaddress
 from time import perf_counter
+from typing import Any
 
 import requests
 
@@ -14,6 +15,7 @@ from app.common.logging import get_logger
 
 from .config_builder import build_outbound_config, build_probe_config
 from .errors import ControlledProbeError, ProbeErrorCode, classify_request_exception
+from .multihost import MultiHostMeasurement, run_multihost_measurement
 from .selectors import ProbeCandidate
 from .singbox import SingBoxRuntime
 from .speedtest import SpeedFailureCode, SpeedMeasurement, run_speed_measurement
@@ -45,6 +47,14 @@ class ProbeResult:
     speed_endpoint_url: str | None = None
     speed_attempts: int = 0
     speed_successes: int = 0
+    user_targets_total: int = 0
+    user_targets_successful: int = 0
+    user_targets_success_ratio: Decimal | None = None
+    critical_targets_total: int = 0
+    critical_targets_successful: int = 0
+    critical_targets_all_success: bool = True
+    multihost_failure_reason: str | None = None
+    multihost_summary: dict[str, Any] | None = None
     error_code: str | None = None
     error_text: str | None = None
 
@@ -75,6 +85,14 @@ class SingBoxProbeBackend(ProbeBackend):
         speed_test_timeout: tuple[int, int],
         speed_test_max_bytes: int,
         speed_test_chunk_size: int,
+        multihost_enabled: bool,
+        baseline_urls: tuple[str, ...],
+        critical_urls: tuple[str, ...],
+        min_user_target_success_ratio: float,
+        require_critical_targets_all_success: bool,
+        min_critical_target_success_ratio: float,
+        max_target_first_byte_ms: int,
+        max_target_latency_ms: int,
     ) -> None:
         self._runtime: SingBoxRuntime | None = None
         self._init_error: ControlledProbeError | None = None
@@ -97,6 +115,14 @@ class SingBoxProbeBackend(ProbeBackend):
         self._speed_test_timeout = speed_test_timeout
         self._speed_test_max_bytes = speed_test_max_bytes
         self._speed_test_chunk_size = speed_test_chunk_size
+        self._multihost_enabled = multihost_enabled
+        self._baseline_urls = tuple(url.strip() for url in baseline_urls if url.strip())
+        self._critical_urls = tuple(url.strip() for url in critical_urls if url.strip())
+        self._min_user_target_success_ratio = min_user_target_success_ratio
+        self._require_critical_targets_all_success = require_critical_targets_all_success
+        self._min_critical_target_success_ratio = min_critical_target_success_ratio
+        self._max_target_first_byte_ms = max_target_first_byte_ms
+        self._max_target_latency_ms = max_target_latency_ms
 
     def probe_candidate(self, candidate: ProbeCandidate) -> ProbeResult:
         checked_at = datetime.now(timezone.utc)
@@ -123,11 +149,17 @@ class SingBoxProbeBackend(ProbeBackend):
                 proxies = self._build_runtime_proxies(listen_port)
                 exit_ip = self._resolve_exit_ip(proxies)
                 connect_ms = max(1, int((perf_counter() - started_at) * 1000))
+                multihost_result = self._run_multihost_measurement(proxies=proxies)
                 speed_result = self._try_speed_test(
                     candidate_id=candidate.id,
                     listen_port=listen_port,
                     proxies=proxies,
                 )
+
+            multihost_summary = self._build_multihost_summary(
+                multihost_result=multihost_result,
+                speed_result=speed_result,
+            )
 
             return ProbeResult(
                 checked_at=checked_at,
@@ -144,6 +176,14 @@ class SingBoxProbeBackend(ProbeBackend):
                 speed_endpoint_url=speed_result.endpoint_url if speed_result else None,
                 speed_attempts=speed_result.attempts if speed_result else 0,
                 speed_successes=speed_result.successes if speed_result else 0,
+                user_targets_total=multihost_result.user_targets_total,
+                user_targets_successful=multihost_result.user_targets_successful,
+                user_targets_success_ratio=multihost_result.user_targets_success_ratio,
+                critical_targets_total=multihost_result.critical_targets_total,
+                critical_targets_successful=multihost_result.critical_targets_successful,
+                critical_targets_all_success=multihost_result.critical_targets_all_success,
+                multihost_failure_reason=multihost_result.failure_reason,
+                multihost_summary=multihost_summary,
             )
         except ControlledProbeError as exc:
             return ProbeResult(
@@ -151,6 +191,8 @@ class SingBoxProbeBackend(ProbeBackend):
                 connect_ok=False,
                 connect_ms=None,
                 exit_ip=None,
+                multihost_failure_reason="connect_failed_before_multihost",
+                multihost_summary=self._skipped_multihost_summary("connect_failed_before_multihost"),
                 error_code=exc.code.value,
                 error_text=self._short_error_text(exc),
             )
@@ -161,6 +203,8 @@ class SingBoxProbeBackend(ProbeBackend):
                 connect_ok=False,
                 connect_ms=None,
                 exit_ip=None,
+                multihost_failure_reason="connect_failed_before_multihost",
+                multihost_summary=self._skipped_multihost_summary("connect_failed_before_multihost"),
                 error_code=error_code.value,
                 error_text=self._short_error_text(exc),
             )
@@ -170,6 +214,8 @@ class SingBoxProbeBackend(ProbeBackend):
                 connect_ok=False,
                 connect_ms=None,
                 exit_ip=None,
+                multihost_failure_reason="connect_failed_before_multihost",
+                multihost_summary=self._skipped_multihost_summary("connect_failed_before_multihost"),
                 error_code=ProbeErrorCode.UNEXPECTED_ERROR.value,
                 error_text=self._short_error_text(exc),
             )
@@ -307,6 +353,49 @@ class SingBoxProbeBackend(ProbeBackend):
             )
         return result
 
+    def _run_multihost_measurement(self, *, proxies: dict[str, str]) -> MultiHostMeasurement:
+        return run_multihost_measurement(
+            session=self._session,
+            proxies=proxies,
+            timeout=self._timeout,
+            baseline_urls=self._baseline_urls,
+            critical_urls=self._critical_urls,
+            max_target_first_byte_ms=self._max_target_first_byte_ms,
+            max_target_latency_ms=self._max_target_latency_ms,
+            min_user_target_success_ratio=self._min_user_target_success_ratio,
+            require_critical_targets_all_success=self._require_critical_targets_all_success,
+            min_critical_target_success_ratio=self._min_critical_target_success_ratio,
+            enabled=self._multihost_enabled,
+        )
+
+    def _build_multihost_summary(
+        self,
+        *,
+        multihost_result: MultiHostMeasurement,
+        speed_result: SpeedMeasurement | None,
+    ) -> dict[str, Any]:
+        summary = multihost_result.to_summary_json(
+            min_user_target_success_ratio=self._min_user_target_success_ratio,
+            require_critical_targets_all_success=self._require_critical_targets_all_success,
+            min_critical_target_success_ratio=self._min_critical_target_success_ratio,
+            max_target_first_byte_ms=self._max_target_first_byte_ms,
+            max_target_latency_ms=self._max_target_latency_ms,
+        )
+
+        summary["groups"]["speed"] = {
+            "configured_endpoints": list(self._speed_test_urls),
+            "attempts": speed_result.attempts if speed_result else 0,
+            "successes": speed_result.successes if speed_result else 0,
+            "measured": bool(speed_result and speed_result.download_mbps is not None),
+            "endpoint_url": speed_result.endpoint_url if speed_result else None,
+            "failure_reason": (
+                speed_result.failure_reason.value
+                if speed_result and speed_result.failure_reason
+                else None
+            ),
+        }
+        return summary
+
     def _unexpected_speed_failure(self, exc: Exception) -> SpeedMeasurement:
         endpoint_url = self._speed_test_urls[0] if self._speed_test_urls else None
         return SpeedMeasurement(
@@ -370,3 +459,32 @@ class SingBoxProbeBackend(ProbeBackend):
         if not message:
             message = exc.__class__.__name__
         return message[:500]
+
+    def _skipped_multihost_summary(self, reason: str) -> dict[str, Any]:
+        return {
+            "enabled": self._multihost_enabled,
+            "passed_policy": False,
+            "failure_reason": reason,
+            "policy": {
+                "min_user_target_success_ratio": self._min_user_target_success_ratio,
+                "require_critical_targets_all_success": self._require_critical_targets_all_success,
+                "min_critical_target_success_ratio": self._min_critical_target_success_ratio,
+                "max_target_first_byte_ms": self._max_target_first_byte_ms,
+                "max_target_latency_ms": self._max_target_latency_ms,
+            },
+            "groups": {
+                "baseline": {"total": 0, "successful": 0},
+                "critical": {"total": 0, "successful": 0, "success_ratio": None},
+                "speed": {
+                    "configured_endpoints": list(self._speed_test_urls),
+                    "attempts": 0,
+                    "successes": 0,
+                    "measured": False,
+                    "endpoint_url": None,
+                    "failure_reason": None,
+                },
+            },
+            "user_targets": {"total": 0, "successful": 0, "success_ratio": None},
+            "critical_targets": {"total": 0, "successful": 0, "all_success": True},
+            "targets": [],
+        }

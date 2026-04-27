@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import json
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -32,13 +33,18 @@ class ProbeCycleStats:
     speed_measured: int = 0
     speed_unavailable: int = 0
     speed_failure_reasons: Counter[str] | None = None
+    multihost_policy_failed: int = 0
+    multihost_failure_reasons: Counter[str] | None = None
 
     def __post_init__(self) -> None:
         if self.speed_failure_reasons is None:
             self.speed_failure_reasons = Counter()
+        if self.multihost_failure_reasons is None:
+            self.multihost_failure_reasons = Counter()
 
     def to_log_extra(self) -> dict[str, int | dict[str, int]]:
         speed_failure_reasons = self.speed_failure_reasons or Counter()
+        multihost_failure_reasons = self.multihost_failure_reasons or Counter()
         return {
             "selected": self.selected,
             "succeeded": self.succeeded,
@@ -48,6 +54,8 @@ class ProbeCycleStats:
             "speed_measured": self.speed_measured,
             "speed_unavailable": self.speed_unavailable,
             "speed_failure_reasons": dict(sorted(speed_failure_reasons.items())),
+            "multihost_policy_failed": self.multihost_policy_failed,
+            "multihost_failure_reasons": dict(sorted(multihost_failure_reasons.items())),
         }
 
 
@@ -75,11 +83,20 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
             "geo_provider_primary": settings.GEO_PROVIDER_PRIMARY,
             "geo_provider_fallback": settings.GEO_PROVIDER_FALLBACK,
             "geo_request_timeout_seconds": settings.GEO_REQUEST_TIMEOUT_SECONDS,
-            "speed_test_urls": settings.speed_test_urls,
+            "speed_test_urls": settings.prober_speed_urls,
             "speed_test_attempts": settings.SPEED_TEST_ATTEMPTS,
             "speed_test_timeout": settings.speed_test_timeout,
             "speed_test_max_bytes": settings.SPEED_TEST_MAX_BYTES,
             "speed_test_chunk_size": settings.SPEED_TEST_CHUNK_SIZE,
+            "multihost_enabled": settings.PROBER_MULTIHOST_ENABLED,
+            "multihost_baseline_urls": settings.prober_baseline_urls,
+            "multihost_critical_urls": settings.prober_critical_urls,
+            "multihost_speed_urls": settings.prober_speed_urls,
+            "multihost_min_user_target_success_ratio": settings.PROBER_MIN_USER_TARGET_SUCCESS_RATIO,
+            "multihost_require_critical_targets_all_success": settings.PROBER_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS,
+            "multihost_min_critical_target_success_ratio": settings.PROBER_MIN_CRITICAL_TARGET_SUCCESS_RATIO,
+            "multihost_max_target_first_byte_ms": settings.PROBER_MAX_TARGET_FIRST_BYTE_MS,
+            "multihost_max_target_latency_ms": settings.PROBER_MAX_TARGET_LATENCY_MS,
         },
     )
 
@@ -92,11 +109,19 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
         connect_timeout_seconds=settings.CONNECT_TIMEOUT_SECONDS,
         read_timeout_seconds=settings.DOWNLOAD_TIMEOUT_SECONDS,
         exit_ip_url=settings.PROBER_EXIT_IP_URL,
-        speed_test_urls=settings.speed_test_urls,
+        speed_test_urls=settings.prober_speed_urls,
         speed_test_attempts=settings.SPEED_TEST_ATTEMPTS,
         speed_test_timeout=settings.speed_test_timeout,
         speed_test_max_bytes=settings.SPEED_TEST_MAX_BYTES,
         speed_test_chunk_size=settings.SPEED_TEST_CHUNK_SIZE,
+        multihost_enabled=settings.PROBER_MULTIHOST_ENABLED,
+        baseline_urls=settings.prober_baseline_urls,
+        critical_urls=settings.prober_critical_urls,
+        min_user_target_success_ratio=settings.PROBER_MIN_USER_TARGET_SUCCESS_RATIO,
+        require_critical_targets_all_success=settings.PROBER_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS,
+        min_critical_target_success_ratio=settings.PROBER_MIN_CRITICAL_TARGET_SUCCESS_RATIO,
+        max_target_first_byte_ms=settings.PROBER_MAX_TARGET_FIRST_BYTE_MS,
+        max_target_latency_ms=settings.PROBER_MAX_TARGET_LATENCY_MS,
     )
     geo_service = GeoService(settings)
 
@@ -161,6 +186,22 @@ def run_probe_cycle(app_settings: Settings | None = None) -> ProbeCycleStats:
                 "speed_endpoint_url": result.speed_endpoint_url,
                 "speed_attempts": result.speed_attempts,
                 "speed_successes": result.speed_successes,
+                "user_targets_total": result.user_targets_total,
+                "user_targets_successful": result.user_targets_successful,
+                "user_targets_success_ratio": (
+                    float(result.user_targets_success_ratio)
+                    if result.user_targets_success_ratio is not None
+                    else None
+                ),
+                "critical_targets_total": result.critical_targets_total,
+                "critical_targets_successful": result.critical_targets_successful,
+                "critical_targets_all_success": result.critical_targets_all_success,
+                "multihost_failure_reason": result.multihost_failure_reason,
+                "multihost_summary": (
+                    json.dumps(result.multihost_summary, ensure_ascii=False, sort_keys=True)
+                    if result.multihost_summary
+                    else None
+                ),
                 "exit_ip": result.exit_ip,
                 "exit_country": exit_country,
                 "geo_match": geo_match,
@@ -198,6 +239,14 @@ def insert_proxy_check(
                 speed_endpoint_url,
                 speed_attempts,
                 speed_successes,
+                user_targets_total,
+                user_targets_successful,
+                user_targets_success_ratio,
+                critical_targets_total,
+                critical_targets_successful,
+                critical_targets_all_success,
+                multihost_failure_reason,
+                multihost_summary,
                 exit_ip,
                 exit_country,
                 geo_match,
@@ -217,6 +266,14 @@ def insert_proxy_check(
                 :speed_endpoint_url,
                 :speed_attempts,
                 :speed_successes,
+                :user_targets_total,
+                :user_targets_successful,
+                :user_targets_success_ratio,
+                :critical_targets_total,
+                :critical_targets_successful,
+                :critical_targets_all_success,
+                :multihost_failure_reason,
+                CAST(:multihost_summary AS jsonb),
                 :exit_ip,
                 :exit_country,
                 :geo_match,
@@ -238,6 +295,18 @@ def insert_proxy_check(
             "speed_endpoint_url": result.speed_endpoint_url,
             "speed_attempts": result.speed_attempts,
             "speed_successes": result.speed_successes,
+            "user_targets_total": result.user_targets_total,
+            "user_targets_successful": result.user_targets_successful,
+            "user_targets_success_ratio": result.user_targets_success_ratio,
+            "critical_targets_total": result.critical_targets_total,
+            "critical_targets_successful": result.critical_targets_successful,
+            "critical_targets_all_success": result.critical_targets_all_success,
+            "multihost_failure_reason": result.multihost_failure_reason,
+            "multihost_summary": (
+                json.dumps(result.multihost_summary, ensure_ascii=False, sort_keys=True)
+                if result.multihost_summary
+                else None
+            ),
             "exit_ip": result.exit_ip,
             "exit_country": exit_country,
             "geo_match": geo_match,
@@ -250,6 +319,10 @@ def insert_proxy_check(
 def _apply_result_to_stats(stats: ProbeCycleStats, result: ProbeResult) -> None:
     if result.connect_ok:
         stats.succeeded += 1
+        if result.multihost_failure_reason:
+            stats.multihost_policy_failed += 1
+            if stats.multihost_failure_reasons is not None:
+                stats.multihost_failure_reasons[result.multihost_failure_reason] += 1
         if result.download_mbps is not None:
             stats.speed_measured += 1
         else:

@@ -1,11 +1,11 @@
 {
-  "active_count": 82,
+  "active_count": 90,
   "considered_by_family": {
-    "black": 27,
-    "white_cidr": 54,
-    "white_sni": 1
+    "black": 21,
+    "white_cidr": 61,
+    "white_sni": 8
   },
-  "considered_candidates_total": 82,
+  "considered_candidates_total": 90,
   "diversity_limits": {
     "max_per_country": 2,
     "max_per_host": 1,
@@ -14,16 +14,29 @@
   },
   "fallback_reason": null,
   "fallback_used": false,
-  "generated_at": "2026-04-26T10:56:41.802934+00:00",
+  "generated_at": "2026-04-27T10:54:21.884125+00:00",
   "hardening_policy": {
+    "eligibility_vs_ranking": {
+      "eligibility": "hard_gates",
+      "ranking": "final_score_within_eligible"
+    },
     "geo_is_diagnostic_only": true,
     "host_group_fallback": "host, then fingerprint, then candidate_id",
+    "max_first_byte_ms": 2200,
     "max_latency_ms": 3000,
+    "max_latest_check_age_minutes": 75,
     "max_per_country": 2,
     "max_per_host": 1,
+    "min_critical_target_success_ratio": 0.95,
     "min_download_mbps": 2.0,
     "min_final_score_exclusive": 0.0,
     "min_freshness_score": 0.75,
+    "min_recent_success_ratio": 0.8,
+    "min_user_target_success_ratio": 0.8,
+    "recent_checks_window": 5,
+    "require_critical_targets_all_success": true,
+    "require_last_two_successes": true,
+    "require_latest_check_success": true,
     "require_speed_measurement": true,
     "requires_enabled_candidates": true,
     "requires_non_empty_raw_config": true,
@@ -36,36 +49,63 @@
     "EXPORT_WHITE_CIDR_LIMIT": 2000,
     "EXPORT_WHITE_SNI_LIMIT": 2000
   },
+  "multihost_quality": {
+    "connect_ok": 726,
+    "critical_targets_failed": 24,
+    "failure_reason_breakdown": {
+      "low_user_target_success_ratio": 31,
+      "multihost_passed": 695
+    },
+    "group_breakdown": {
+      "baseline": {
+        "successful": 142,
+        "total": 172
+      },
+      "critical": {
+        "successful": 136,
+        "total": 172
+      }
+    },
+    "latest_checks": 2198,
+    "low_user_target_success_ratio": 31,
+    "multihost_policy_failed": 31,
+    "policy": {
+      "min_critical_target_success_ratio": 0.95,
+      "min_user_target_success_ratio": 0.8,
+      "require_critical_targets_all_success": true
+    },
+    "with_user_targets": 90
+  },
   "output_files": {
     "ALL-ETALON.txt": {
-      "considered": 82,
+      "considered": 90,
       "limit": 10000,
-      "selected": 22
+      "selected": 3
     },
     "BLACK-ETALON.txt": {
-      "considered": 27,
+      "considered": 21,
       "limit": 5000,
-      "selected": 8
+      "selected": 2
     },
     "WHITE-CIDR-ETALON.txt": {
-      "considered": 54,
-      "limit": 2000,
-      "selected": 17
-    },
-    "WHITE-SNI-ETALON.txt": {
-      "considered": 1,
+      "considered": 61,
       "limit": 2000,
       "selected": 1
+    },
+    "WHITE-SNI-ETALON.txt": {
+      "considered": 8,
+      "limit": 2000,
+      "selected": 0
     }
   },
   "proxy_state_status_counts": {
-    "active": 82,
-    "dead": 795,
-    "degraded": 1187,
-    "unknown": 132
+    "active": 90,
+    "dead": 840,
+    "degraded": 1268,
+    "unknown": 531
   },
-  "selected_candidates_total_across_files": 48,
-  "selected_unique_candidates": 26,
+  "selected_candidates_total_across_files": 6,
+  "selected_unique_candidates": 3,
   "sorting": [
     "final_score DESC",
     "stability_ratio DESC NULLS LAST",
@@ -74,6 +114,7 @@
   ],
   "source": {
     "config_source": "proxy_candidates",
+    "eligibility_source": "exporter_hard_policy",
     "fallback_policy": "reuse_last_good_when_active_empty",
     "geo_is_diagnostic_only": true,
     "ranking_source": "proxy_state",
@@ -83,27 +124,27 @@
     "status_filter": "active"
   },
   "speed_quality": {
-    "connect_failed": 1428,
-    "connect_ok": 636,
-    "latest_checks": 2064,
+    "connect_failed": 1472,
+    "connect_ok": 726,
+    "latest_checks": 2198,
     "legacy_empty_speed_diagnostics": 0,
     "speed_error_code_breakdown": {
-      "speed_all_endpoints_failed": 28,
-      "speed_error_code_null": 2031,
-      "speed_unexpected_error": 5
+      "speed_all_endpoints_failed": 33,
+      "speed_error_code_null": 2159,
+      "speed_unexpected_error": 6
     },
-    "speed_measured": 603,
-    "speed_new_format": 636,
+    "speed_measured": 687,
+    "speed_new_format": 726,
     "speed_semantics_breakdown": {
-      "connect_failed": 1428,
-      "diagnosed_unavailable": 33,
-      "measured": 603
+      "connect_failed": 1472,
+      "diagnosed_unavailable": 39,
+      "measured": 687
     },
-    "speed_unavailable": 33,
+    "speed_unavailable": 39,
     "speed_unavailable_by_reason": {
-      "speed_http_error": 5,
+      "speed_http_error": 10,
       "speed_timeout": 23,
-      "speed_unexpected_error": 5
+      "speed_unexpected_error": 6
     }
   }
 }

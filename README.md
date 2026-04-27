@@ -91,18 +91,30 @@ docker compose exec pipeline-runner cat /app/output/export_manifest.json
 - `ORCHESTRATOR_STARTUP_DELAY_SECONDS` delays first cycle after container start.
 - `ORCHESTRATOR_EXIT_ON_FAILURE=true` makes runner exit on first failed cycle.
 - Curated export hardening is controlled by `EXPORT_MAX_PER_COUNTRY`, `EXPORT_MAX_PER_HOST`,
-  `EXPORT_MAX_LATENCY_MS`, `EXPORT_MIN_DOWNLOAD_MBPS`, `EXPORT_REQUIRE_SPEED_MEASUREMENT`,
-  and `EXPORT_MIN_FRESHNESS_SCORE`.
+  `EXPORT_MAX_LATENCY_MS`, `EXPORT_MAX_FIRST_BYTE_MS`, `EXPORT_MIN_DOWNLOAD_MBPS`,
+  `EXPORT_REQUIRE_SPEED_MEASUREMENT`, `EXPORT_REQUIRE_LATEST_CHECK_SUCCESS`,
+  `EXPORT_MAX_LATEST_CHECK_AGE_MINUTES`, `EXPORT_REQUIRE_LAST_TWO_SUCCESSES`,
+  `EXPORT_RECENT_CHECKS_WINDOW`, `EXPORT_MIN_RECENT_SUCCESS_RATIO`,
+  `EXPORT_MIN_USER_TARGET_SUCCESS_RATIO`, `EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS`,
+  `EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO`, and `EXPORT_MIN_FRESHNESS_SCORE`.
 
 ## Speed measurement
 The prober keeps connect/exit-IP success separate from throughput quality. A proxy can be `connect_ok=true` even when speed measurement is unavailable.
 
 Speed testing is deterministic and bounded:
-- `SPEED_TEST_URLS` is a comma-separated primary + fallback endpoint list.
+- `PROBER_SPEED_URLS` is a comma-separated bounded speed-target list for throughput checks;
+- `SPEED_TEST_URLS` remains a legacy fallback if `PROBER_SPEED_URLS` is empty.
 - `SPEED_TEST_URL` is still supported as a legacy fallback.
 - `SPEED_TEST_ATTEMPTS` controls total bounded attempts; every configured endpoint is tried at least once until up to three successful samples are collected.
 - successful samples are aggregated with median `first_byte_ms` and median `download_mbps`.
 - `SPEED_TEST_CONNECT_TIMEOUT_SECONDS`, `SPEED_TEST_READ_TIMEOUT_SECONDS`, `SPEED_TEST_MAX_BYTES`, and `SPEED_TEST_CHUNK_SIZE` keep each candidate probe bounded.
+
+Multi-host lightweight verification is configured separately from throughput:
+- `PROBER_MULTIHOST_ENABLED=true` enables bounded baseline/critical checks per candidate;
+- `PROBER_BASELINE_URLS` and `PROBER_CRITICAL_URLS` are comma-separated deterministic target lists;
+- `PROBER_MULTIHOST_MAX_TARGETS_PER_GROUP` caps per-group checks;
+- `PROBER_MAX_TARGET_FIRST_BYTE_MS` and `PROBER_MAX_TARGET_LATENCY_MS` enforce per-target thresholds;
+- `PROBER_MIN_USER_TARGET_SUCCESS_RATIO`, `PROBER_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS`, and `PROBER_MIN_CRITICAL_TARGET_SUCCESS_RATIO` define policy and diagnostics persisted in `proxy_checks`.
 
 Default endpoints:
 ```dotenv
@@ -196,9 +208,16 @@ They remain visible in DB/API/debug artifacts, but country expectation no longer
 Exporter selection is intentionally stricter than scorer ranking. It first orders candidates by `proxy_state.final_score`, then applies hard export thresholds:
 - `EXPORT_MAX_PER_COUNTRY=2`: at most two selected configs per `current_country` group;
 - `EXPORT_MAX_PER_HOST=1`: at most one selected config per host; empty host falls back to fingerprint, then candidate id;
-- `EXPORT_MAX_LATENCY_MS=3000`: candidates without latency or above 3000 ms are rejected by default;
+- `EXPORT_REQUIRE_LATEST_CHECK_SUCCESS=true`: latest `proxy_checks` row must be `connect_ok=true`;
+- `EXPORT_MAX_LATEST_CHECK_AGE_MINUTES=75`: latest check must be fresh;
+- `EXPORT_REQUIRE_LAST_TWO_SUCCESSES=true`: two latest checks must both be successful;
+- `EXPORT_RECENT_CHECKS_WINDOW=5` + `EXPORT_MIN_RECENT_SUCCESS_RATIO=0.80`: recent stability hard gate;
+- `EXPORT_MAX_LATENCY_MS=3000`: both aggregated state latency and latest check latency must be <= threshold;
+- `EXPORT_MAX_FIRST_BYTE_MS=2200`: latest check first-byte must be <= threshold;
 - `EXPORT_REQUIRE_SPEED_MEASUREMENT=true`: candidates with `state_download_mbps=null` are rejected by default;
-- `EXPORT_MIN_DOWNLOAD_MBPS=2.0`: measured speeds below 2 Mbps are rejected;
+- `EXPORT_MIN_DOWNLOAD_MBPS=2.0`: both aggregated state and latest-check speed must meet threshold;
+- `EXPORT_MIN_USER_TARGET_SUCCESS_RATIO=0.80`: latest multi-host user target ratio hard gate;
+- `EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS=true` or `EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO=0.95`: critical target pass policy;
 - `EXPORT_MIN_FRESHNESS_SCORE=0.75`: stale active candidates are rejected before curated output.
 
 If `EXPORT_REQUIRE_SPEED_MEASUREMENT=false`, candidates with missing `state_download_mbps` may pass the speed-availability gate, but measured candidates still have to satisfy `EXPORT_MIN_DOWNLOAD_MBPS`. This switch exists for temporary low-coverage incidents; the default curated policy requires a real speed signal.
@@ -207,10 +226,16 @@ The selected TXT files remain client-facing output. Exporter now relabels only d
 - `policy`: thresholds used by the exporter;
 - `summary.disabled_candidate_skipped`;
 - `summary.low_final_score_skipped`;
-- `summary.latency_threshold_skipped`;
+- `summary.latest_check_failed_skipped`;
+- `summary.stale_skipped`;
 - `summary.missing_speed_skipped`;
 - `summary.low_speed_skipped`;
+- `summary.high_latency_skipped`;
+- `summary.high_first_byte_skipped`;
 - `summary.freshness_threshold_skipped`;
+- `summary.unstable_recent_checks_skipped`;
+- `summary.low_user_target_success_ratio_skipped`;
+- `summary.critical_targets_failed_skipped`;
 - `summary.country_limit_skipped`;
 - `summary.host_limit_skipped`;
 - `summary.legacy_no_speed_semantics_skipped`;
