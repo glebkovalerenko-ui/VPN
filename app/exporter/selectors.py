@@ -96,7 +96,17 @@ def select_export_candidates(
                         WHEN COUNT(*) FILTER (WHERE rc.rn <= 2) < 2
                         THEN NULL
                         ELSE BOOL_AND(rc.connect_ok) FILTER (WHERE rc.rn <= 2)
-                    END AS latest_two_checks_successful
+                    END AS latest_two_checks_successful,
+                    COALESCE(
+                        MIN(
+                            CASE
+                                WHEN rc.connect_ok IS NOT TRUE
+                                THEN rc.rn
+                                ELSE NULL
+                            END
+                        ) - 1,
+                        COUNT(*)
+                    )::int AS latest_consecutive_successes
                 FROM ranked_checks AS rc
                 WHERE rc.rn <= :recent_checks_window
                 GROUP BY rc.candidate_id
@@ -145,7 +155,8 @@ def select_export_candidates(
                 rc.recent_checks_total,
                 rc.recent_checks_successful,
                 rc.recent_checks_success_ratio,
-                rc.latest_two_checks_successful
+                rc.latest_two_checks_successful,
+                rc.latest_consecutive_successes
             FROM proxy_state AS ps
             JOIN proxy_candidates AS c
                 ON c.id = ps.candidate_id
@@ -207,6 +218,7 @@ def select_export_candidates(
             recent_checks_successful=int(row["recent_checks_successful"] or 0),
             recent_checks_success_ratio=row["recent_checks_success_ratio"],
             latest_two_checks_successful=row["latest_two_checks_successful"],
+            latest_consecutive_successes=int(row["latest_consecutive_successes"] or 0),
             geo_confidence=row["geo_confidence"],
             freshness_score=row["freshness_score"],
             last_success_at=row["last_success_at"],

@@ -18,9 +18,12 @@ def _build_policy(**overrides: object) -> ExportPolicy:
         "max_first_byte_ms": 1500,
         "min_download_mbps": Decimal("5.0"),
         "require_speed_measurement": True,
+        "allow_legacy_speed_if_other_signals_strong": False,
         "require_latest_check_success": True,
         "max_latest_check_age_minutes": 60,
-        "require_last_two_successes": True,
+        "require_last_two_successes": False,
+        "require_consecutive_successes": True,
+        "min_consecutive_successes": 2,
         "recent_checks_window": 5,
         "min_recent_success_ratio": Decimal("0.8000"),
         "min_user_target_success_ratio": Decimal("0.8000"),
@@ -74,6 +77,7 @@ def _build_candidate(**overrides: object) -> ExportCandidate:
         "recent_checks_successful": 5,
         "recent_checks_success_ratio": Decimal("1.0000"),
         "latest_two_checks_successful": True,
+        "latest_consecutive_successes": 5,
         "geo_confidence": Decimal("1.0000"),
         "freshness_score": Decimal("0.9000"),
         "last_success_at": now,
@@ -132,6 +136,7 @@ class ExporterHardPolicyTests(unittest.TestCase):
             latest_check_checked_at=stale_at,
             recent_checks_success_ratio=Decimal("0.4000"),
             latest_two_checks_successful=False,
+            latest_consecutive_successes=0,
             recent_checks_successful=2,
         )
         policy = _build_policy(max_latest_check_age_minutes=60, min_recent_success_ratio=Decimal("0.8000"))
@@ -144,7 +149,42 @@ class ExporterHardPolicyTests(unittest.TestCase):
         self.assertIn("stale", reasons)
         self.assertIn("unstable_recent_checks", reasons)
 
+    def test_single_recent_success_can_pass_when_min_consecutive_is_one(self) -> None:
+        candidate = _build_candidate(
+            latest_two_checks_successful=False,
+            latest_consecutive_successes=1,
+            recent_checks_total=1,
+            recent_checks_successful=1,
+            recent_checks_success_ratio=Decimal("1.0000"),
+        )
+        policy = _build_policy(min_consecutive_successes=1)
+
+        reasons = _policy_rejection_reasons(
+            candidate,
+            policy,
+            evaluated_at=datetime.now(timezone.utc),
+        )
+        self.assertNotIn("unstable_recent_checks", reasons)
+
+    def test_critical_policy_can_use_ratio_threshold(self) -> None:
+        candidate = _build_candidate(
+            latest_critical_targets_total=2,
+            latest_critical_targets_successful=1,
+            latest_critical_targets_all_success=False,
+            latest_multihost_failure_reason="critical_targets_failed",
+        )
+        policy = _build_policy(
+            require_critical_targets_all_success=False,
+            min_critical_target_success_ratio=Decimal("0.5000"),
+        )
+
+        reasons = _policy_rejection_reasons(
+            candidate,
+            policy,
+            evaluated_at=datetime.now(timezone.utc),
+        )
+        self.assertNotIn("critical_targets_failed", reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
-

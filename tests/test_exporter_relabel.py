@@ -58,6 +58,7 @@ def _make_candidate(raw_config: str, **overrides: object) -> ExportCandidate:
         "recent_checks_successful": 5,
         "recent_checks_success_ratio": Decimal("1.0000"),
         "latest_two_checks_successful": True,
+        "latest_consecutive_successes": 5,
         "geo_confidence": Decimal("1.0"),
         "freshness_score": Decimal("0.95"),
         "last_success_at": datetime(2026, 4, 26, tzinfo=timezone.utc),

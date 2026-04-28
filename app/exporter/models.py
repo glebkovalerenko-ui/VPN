@@ -49,6 +49,7 @@ class ExportCandidate:
     recent_checks_successful: int
     recent_checks_success_ratio: Decimal | None
     latest_two_checks_successful: bool | None
+    latest_consecutive_successes: int
     geo_confidence: Decimal | None
     freshness_score: Decimal | None
     last_success_at: datetime | None
@@ -95,11 +96,14 @@ class ExportSelectionSummary:
     max_latest_check_age_minutes: int
     max_first_byte_ms: int
     require_last_two_successes: bool
+    require_consecutive_successes: bool
+    min_consecutive_successes: int
     recent_checks_window: int
     min_recent_success_ratio: Decimal
     min_user_target_success_ratio: Decimal
     require_critical_targets_all_success: bool
     min_critical_target_success_ratio: Decimal
+    allow_legacy_speed_if_other_signals_strong: bool
     min_freshness_score: Decimal
     min_final_score_exclusive: Decimal
     rejected_before_diversity: int

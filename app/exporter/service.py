@@ -104,9 +104,12 @@ class ExportPolicy:
     max_first_byte_ms: int
     min_download_mbps: Decimal
     require_speed_measurement: bool
+    allow_legacy_speed_if_other_signals_strong: bool
     require_latest_check_success: bool
     max_latest_check_age_minutes: int
     require_last_two_successes: bool
+    require_consecutive_successes: bool
+    min_consecutive_successes: int
     recent_checks_window: int
     min_recent_success_ratio: Decimal
     min_user_target_success_ratio: Decimal
@@ -272,6 +275,17 @@ def run_export_cycle(app_settings: Settings | None = None) -> ExportCycleStats:
 
 
 def _build_export_policy(settings: Settings) -> ExportPolicy:
+    min_consecutive_successes = min(
+        settings.EXPORT_MIN_CONSECUTIVE_SUCCESSES,
+        settings.EXPORT_RECENT_CHECKS_WINDOW,
+    )
+    min_consecutive_successes = max(1, min_consecutive_successes)
+    require_consecutive_successes = settings.EXPORT_REQUIRE_CONSECUTIVE_SUCCESSES
+    # Backward-compatible legacy toggle: force strict "last two checks" if explicitly enabled.
+    if settings.EXPORT_REQUIRE_LAST_TWO_SUCCESSES:
+        require_consecutive_successes = True
+        min_consecutive_successes = max(min_consecutive_successes, 2)
+
     return ExportPolicy(
         max_per_country=settings.EXPORT_MAX_PER_COUNTRY,
         max_per_host=settings.EXPORT_MAX_PER_HOST,
@@ -279,9 +293,12 @@ def _build_export_policy(settings: Settings) -> ExportPolicy:
         max_first_byte_ms=settings.EXPORT_MAX_FIRST_BYTE_MS,
         min_download_mbps=Decimal(str(settings.EXPORT_MIN_DOWNLOAD_MBPS)),
         require_speed_measurement=settings.EXPORT_REQUIRE_SPEED_MEASUREMENT,
+        allow_legacy_speed_if_other_signals_strong=settings.EXPORT_ALLOW_LEGACY_SPEED_IF_OTHER_SIGNALS_STRONG,
         require_latest_check_success=settings.EXPORT_REQUIRE_LATEST_CHECK_SUCCESS,
         max_latest_check_age_minutes=settings.EXPORT_MAX_LATEST_CHECK_AGE_MINUTES,
         require_last_two_successes=settings.EXPORT_REQUIRE_LAST_TWO_SUCCESSES,
+        require_consecutive_successes=require_consecutive_successes,
+        min_consecutive_successes=min_consecutive_successes,
         recent_checks_window=settings.EXPORT_RECENT_CHECKS_WINDOW,
         min_recent_success_ratio=Decimal(str(settings.EXPORT_MIN_RECENT_SUCCESS_RATIO)),
         min_user_target_success_ratio=Decimal(str(settings.EXPORT_MIN_USER_TARGET_SUCCESS_RATIO)),
@@ -317,11 +334,14 @@ def _apply_diversity_limits(
         require_latest_check_success=policy.require_latest_check_success,
         max_latest_check_age_minutes=policy.max_latest_check_age_minutes,
         require_last_two_successes=policy.require_last_two_successes,
+        require_consecutive_successes=policy.require_consecutive_successes,
+        min_consecutive_successes=policy.min_consecutive_successes,
         recent_checks_window=policy.recent_checks_window,
         min_recent_success_ratio=policy.min_recent_success_ratio,
         min_user_target_success_ratio=policy.min_user_target_success_ratio,
         require_critical_targets_all_success=policy.require_critical_targets_all_success,
         min_critical_target_success_ratio=policy.min_critical_target_success_ratio,
+        allow_legacy_speed_if_other_signals_strong=policy.allow_legacy_speed_if_other_signals_strong,
         min_freshness_score=policy.min_freshness_score,
         min_final_score_exclusive=policy.min_final_score_exclusive,
         rejected_before_diversity=0,
@@ -470,7 +490,12 @@ def _policy_rejection_reasons(
         reasons.append("stale")
 
     if candidate.download_mbps is None or candidate.latest_check_download_mbps is None:
-        if policy.require_speed_measurement:
+        allow_missing_speed = _allows_missing_speed_by_policy(
+            candidate,
+            policy,
+            evaluated_at=evaluated_at,
+        )
+        if policy.require_speed_measurement and not allow_missing_speed:
             reasons.append("missing_speed")
             if _latest_check_speed_semantics(candidate) == "legacy_no_speed_diagnostics":
                 reasons.append("legacy_no_speed_semantics")
@@ -495,7 +520,7 @@ def _policy_rejection_reasons(
     if candidate.freshness_score is None or candidate.freshness_score < policy.min_freshness_score:
         reasons.append("freshness_threshold")
 
-    if policy.require_last_two_successes and candidate.latest_two_checks_successful is not True:
+    if not _passes_consecutive_success_policy(candidate, policy):
         reasons.append("unstable_recent_checks")
     if (
         candidate.recent_checks_success_ratio is None
@@ -582,6 +607,61 @@ def _passes_multihost_critical_policy(candidate: ExportCandidate, policy: Export
     if ratio is None:
         return False
     return ratio >= policy.min_critical_target_success_ratio
+
+
+def _passes_consecutive_success_policy(candidate: ExportCandidate, policy: ExportPolicy) -> bool:
+    if not policy.require_consecutive_successes:
+        return True
+    return candidate.latest_consecutive_successes >= policy.min_consecutive_successes
+
+
+def _allows_missing_speed_by_policy(
+    candidate: ExportCandidate,
+    policy: ExportPolicy,
+    *,
+    evaluated_at: datetime,
+) -> bool:
+    if not policy.allow_legacy_speed_if_other_signals_strong:
+        return False
+    if _latest_check_speed_semantics(candidate) != "legacy_no_speed_diagnostics":
+        return False
+    if candidate.latest_check_connect_ok is not True:
+        return False
+    if _is_latest_check_stale(
+        latest_check_checked_at=candidate.latest_check_checked_at,
+        evaluated_at=evaluated_at,
+        max_latest_check_age_minutes=policy.max_latest_check_age_minutes,
+    ):
+        return False
+    if (
+        candidate.latency_ms is None
+        or candidate.latest_check_connect_ms is None
+        or candidate.latency_ms > policy.max_latency_ms
+        or candidate.latest_check_connect_ms > policy.max_latency_ms
+    ):
+        return False
+    if (
+        candidate.latest_check_first_byte_ms is None
+        or candidate.latest_check_first_byte_ms > policy.max_first_byte_ms
+    ):
+        return False
+    if (
+        candidate.freshness_score is None
+        or candidate.freshness_score < policy.min_freshness_score
+    ):
+        return False
+    if (
+        candidate.recent_checks_success_ratio is None
+        or candidate.recent_checks_success_ratio < policy.min_recent_success_ratio
+    ):
+        return False
+    if not _passes_consecutive_success_policy(candidate, policy):
+        return False
+    if not _passes_multihost_user_ratio(candidate, policy):
+        return False
+    if not _passes_multihost_critical_policy(candidate, policy):
+        return False
+    return True
 
 
 def _critical_targets_success_ratio(candidate: ExportCandidate) -> Decimal | None:
@@ -698,11 +778,14 @@ def _build_debug_export_payload(
         "require_latest_check_success": summary.require_latest_check_success,
         "max_latest_check_age_minutes": summary.max_latest_check_age_minutes,
         "require_last_two_successes": summary.require_last_two_successes,
+        "require_consecutive_successes": summary.require_consecutive_successes,
+        "min_consecutive_successes": summary.min_consecutive_successes,
         "recent_checks_window": summary.recent_checks_window,
         "min_recent_success_ratio": _decimal_to_json_number(summary.min_recent_success_ratio),
         "min_user_target_success_ratio": _decimal_to_json_number(summary.min_user_target_success_ratio),
         "require_critical_targets_all_success": summary.require_critical_targets_all_success,
         "min_critical_target_success_ratio": _decimal_to_json_number(summary.min_critical_target_success_ratio),
+        "allow_legacy_speed_if_other_signals_strong": summary.allow_legacy_speed_if_other_signals_strong,
         "min_freshness_score": _decimal_to_json_number(summary.min_freshness_score),
         "min_final_score_exclusive": _decimal_to_json_number(summary.min_final_score_exclusive),
         "rejected_before_diversity": summary.rejected_before_diversity,
@@ -821,7 +904,10 @@ def _export_policy_payload(policy: ExportPolicy) -> dict[str, Any]:
         "max_first_byte_ms": policy.max_first_byte_ms,
         "min_download_mbps": _decimal_to_json_number(policy.min_download_mbps),
         "require_speed_measurement": policy.require_speed_measurement,
+        "allow_legacy_speed_if_other_signals_strong": policy.allow_legacy_speed_if_other_signals_strong,
         "require_last_two_successes": policy.require_last_two_successes,
+        "require_consecutive_successes": policy.require_consecutive_successes,
+        "min_consecutive_successes": policy.min_consecutive_successes,
         "recent_checks_window": policy.recent_checks_window,
         "min_recent_success_ratio": _decimal_to_json_number(policy.min_recent_success_ratio),
         "min_user_target_success_ratio": _decimal_to_json_number(policy.min_user_target_success_ratio),
@@ -909,6 +995,7 @@ def _candidate_debug_payload(
         "recent_checks_successful": candidate.recent_checks_successful,
         "recent_checks_success_ratio": _decimal_to_json_number(candidate.recent_checks_success_ratio),
         "latest_two_checks_successful": candidate.latest_two_checks_successful,
+        "latest_consecutive_successes": candidate.latest_consecutive_successes,
         "latest_check_speed_attempts": candidate.speed_attempts,
         "latest_check_speed_successes": candidate.speed_successes,
         "latest_check_speed_error_code": candidate.speed_error_code,
@@ -945,6 +1032,23 @@ def _passed_policy_checks(
     critical_ratio = _critical_targets_success_ratio(candidate)
     critical_policy_passed = _passes_multihost_critical_policy(candidate, policy)
     user_policy_passed = _passes_multihost_user_ratio(candidate, policy)
+    speed_measurement_available = (
+        candidate.download_mbps is not None
+        and candidate.latest_check_download_mbps is not None
+    )
+    speed_waived_by_legacy_policy = (
+        not speed_measurement_available
+        and _allows_missing_speed_by_policy(
+            candidate,
+            policy,
+            evaluated_at=evaluated_at,
+        )
+    )
+    speed_policy_ok = (
+        speed_measurement_available
+        or not policy.require_speed_measurement
+        or speed_waived_by_legacy_policy
+    )
     return {
         "enabled_candidate": candidate.is_enabled,
         "valid_raw_config": bool((candidate.raw_config or "").strip())
@@ -958,11 +1062,9 @@ def _passed_policy_checks(
             evaluated_at=evaluated_at,
             max_latest_check_age_minutes=policy.max_latest_check_age_minutes,
         ),
-        "speed_measurement_available": (
-            candidate.download_mbps is not None and candidate.latest_check_download_mbps is not None
-            if policy.require_speed_measurement
-            else True
-        ),
+        "speed_measurement_available": speed_measurement_available,
+        "speed_measurement_waived_by_legacy_policy": speed_waived_by_legacy_policy,
+        "speed_measurement_policy_ok": speed_policy_ok,
         "meets_min_download_mbps": candidate.download_mbps is not None
         and candidate.latest_check_download_mbps is not None
         and candidate.download_mbps >= policy.min_download_mbps
@@ -975,9 +1077,10 @@ def _passed_policy_checks(
         and candidate.latest_check_first_byte_ms <= policy.max_first_byte_ms,
         "meets_min_freshness_score": candidate.freshness_score is not None
         and candidate.freshness_score >= policy.min_freshness_score,
-        "latest_two_checks_successful": (
-            candidate.latest_two_checks_successful is True
-            if policy.require_last_two_successes
+        "latest_two_checks_successful": candidate.latest_two_checks_successful is True,
+        "latest_consecutive_successes": (
+            candidate.latest_consecutive_successes >= policy.min_consecutive_successes
+            if policy.require_consecutive_successes
             else True
         ),
         "recent_success_ratio_ok": candidate.recent_checks_success_ratio is not None

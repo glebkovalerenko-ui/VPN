@@ -93,7 +93,8 @@ docker compose exec pipeline-runner cat /app/output/export_manifest.json
 - Curated export hardening is controlled by `EXPORT_MAX_PER_COUNTRY`, `EXPORT_MAX_PER_HOST`,
   `EXPORT_MAX_LATENCY_MS`, `EXPORT_MAX_FIRST_BYTE_MS`, `EXPORT_MIN_DOWNLOAD_MBPS`,
   `EXPORT_REQUIRE_SPEED_MEASUREMENT`, `EXPORT_REQUIRE_LATEST_CHECK_SUCCESS`,
-  `EXPORT_MAX_LATEST_CHECK_AGE_MINUTES`, `EXPORT_REQUIRE_LAST_TWO_SUCCESSES`,
+  `EXPORT_ALLOW_LEGACY_SPEED_IF_OTHER_SIGNALS_STRONG`, `EXPORT_MAX_LATEST_CHECK_AGE_MINUTES`,
+  `EXPORT_REQUIRE_CONSECUTIVE_SUCCESSES`, `EXPORT_MIN_CONSECUTIVE_SUCCESSES`,
   `EXPORT_RECENT_CHECKS_WINDOW`, `EXPORT_MIN_RECENT_SUCCESS_RATIO`,
   `EXPORT_MIN_USER_TARGET_SUCCESS_RATIO`, `EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS`,
   `EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO`, and `EXPORT_MIN_FRESHNESS_SCORE`.
@@ -210,17 +211,19 @@ Exporter selection is intentionally stricter than scorer ranking. It first order
 - `EXPORT_MAX_PER_HOST=1`: at most one selected config per host; empty host falls back to fingerprint, then candidate id;
 - `EXPORT_REQUIRE_LATEST_CHECK_SUCCESS=true`: latest `proxy_checks` row must be `connect_ok=true`;
 - `EXPORT_MAX_LATEST_CHECK_AGE_MINUTES=75`: latest check must be fresh;
-- `EXPORT_REQUIRE_LAST_TWO_SUCCESSES=true`: two latest checks must both be successful;
-- `EXPORT_RECENT_CHECKS_WINDOW=5` + `EXPORT_MIN_RECENT_SUCCESS_RATIO=0.80`: recent stability hard gate;
-- `EXPORT_MAX_LATENCY_MS=3000`: both aggregated state latency and latest check latency must be <= threshold;
-- `EXPORT_MAX_FIRST_BYTE_MS=2200`: latest check first-byte must be <= threshold;
+- `EXPORT_REQUIRE_CONSECUTIVE_SUCCESSES=true` + `EXPORT_MIN_CONSECUTIVE_SUCCESSES=1`: latest consecutive successful checks requirement (legacy `EXPORT_REQUIRE_LAST_TWO_SUCCESSES` is still accepted as strict-2 compatibility toggle);
+- `EXPORT_RECENT_CHECKS_WINDOW=5` + `EXPORT_MIN_RECENT_SUCCESS_RATIO=0.75`: recent stability hard gate;
+- `EXPORT_MAX_LATENCY_MS=3200`: both aggregated state latency and latest check latency must be <= threshold;
+- `EXPORT_MAX_FIRST_BYTE_MS=2400`: latest check first-byte must be <= threshold;
 - `EXPORT_REQUIRE_SPEED_MEASUREMENT=true`: candidates with `state_download_mbps=null` are rejected by default;
-- `EXPORT_MIN_DOWNLOAD_MBPS=2.0`: both aggregated state and latest-check speed must meet threshold;
+- `EXPORT_ALLOW_LEGACY_SPEED_IF_OTHER_SIGNALS_STRONG=false`: optional waiver only for legacy rows without speed diagnostics and with otherwise strong signals;
+- `EXPORT_MIN_DOWNLOAD_MBPS=2.0`: both aggregated state and latest-check speed must meet threshold when measured;
 - `EXPORT_MIN_USER_TARGET_SUCCESS_RATIO=0.80`: latest multi-host user target ratio hard gate;
-- `EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS=true` or `EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO=0.95`: critical target pass policy;
+- `EXPORT_REQUIRE_CRITICAL_TARGETS_ALL_SUCCESS=false` + `EXPORT_MIN_CRITICAL_TARGET_SUCCESS_RATIO=0.50`: critical-target policy defaults to ratio mode instead of strict all-success;
 - `EXPORT_MIN_FRESHNESS_SCORE=0.75`: stale active candidates are rejected before curated output.
 
 If `EXPORT_REQUIRE_SPEED_MEASUREMENT=false`, candidates with missing `state_download_mbps` may pass the speed-availability gate, but measured candidates still have to satisfy `EXPORT_MIN_DOWNLOAD_MBPS`. This switch exists for temporary low-coverage incidents; the default curated policy requires a real speed signal.
+`EXPORT_ALLOW_LEGACY_SPEED_IF_OTHER_SIGNALS_STRONG=true` is a narrower alternative: it keeps speed measurement required for normal rows but allows legacy no-speed-diagnostics rows to pass only when freshness, latency, stability, and multihost checks are all strong.
 
 The selected TXT files remain client-facing output. Exporter now relabels only display names at export-time while preserving connection-critical link parts. The debug JSON files are the operator view and include:
 - `policy`: thresholds used by the exporter;
