@@ -1,11 +1,11 @@
 {
-  "active_count": 90,
+  "active_count": 66,
   "considered_by_family": {
-    "black": 21,
-    "white_cidr": 61,
-    "white_sni": 8
+    "black": 26,
+    "white_cidr": 26,
+    "white_sni": 14
   },
-  "considered_candidates_total": 90,
+  "considered_candidates_total": 66,
   "diversity_limits": {
     "max_per_country": 2,
     "max_per_host": 1,
@@ -14,28 +14,31 @@
   },
   "fallback_reason": null,
   "fallback_used": false,
-  "generated_at": "2026-04-27T10:54:21.884125+00:00",
+  "generated_at": "2026-04-28T09:50:16.750113+00:00",
   "hardening_policy": {
+    "allow_legacy_speed_if_other_signals_strong": false,
     "eligibility_vs_ranking": {
       "eligibility": "hard_gates",
       "ranking": "final_score_within_eligible"
     },
     "geo_is_diagnostic_only": true,
     "host_group_fallback": "host, then fingerprint, then candidate_id",
-    "max_first_byte_ms": 2200,
-    "max_latency_ms": 3000,
+    "max_first_byte_ms": 2400,
+    "max_latency_ms": 3200,
     "max_latest_check_age_minutes": 75,
     "max_per_country": 2,
     "max_per_host": 1,
-    "min_critical_target_success_ratio": 0.95,
+    "min_consecutive_successes": 1,
+    "min_critical_target_success_ratio": 0.5,
     "min_download_mbps": 2.0,
     "min_final_score_exclusive": 0.0,
     "min_freshness_score": 0.75,
-    "min_recent_success_ratio": 0.8,
+    "min_recent_success_ratio": 0.75,
     "min_user_target_success_ratio": 0.8,
     "recent_checks_window": 5,
-    "require_critical_targets_all_success": true,
-    "require_last_two_successes": true,
+    "require_consecutive_successes": true,
+    "require_critical_targets_all_success": false,
+    "require_last_two_successes": false,
     "require_latest_check_success": true,
     "require_speed_measurement": true,
     "requires_enabled_candidates": true,
@@ -50,62 +53,62 @@
     "EXPORT_WHITE_SNI_LIMIT": 2000
   },
   "multihost_quality": {
-    "connect_ok": 726,
-    "critical_targets_failed": 24,
+    "connect_ok": 792,
+    "critical_targets_failed": 38,
     "failure_reason_breakdown": {
-      "low_user_target_success_ratio": 31,
-      "multihost_passed": 695
+      "low_user_target_success_ratio": 76,
+      "multihost_passed": 716
     },
     "group_breakdown": {
       "baseline": {
-        "successful": 142,
-        "total": 172
+        "successful": 231,
+        "total": 304
       },
       "critical": {
-        "successful": 136,
-        "total": 172
+        "successful": 206,
+        "total": 304
       }
     },
-    "latest_checks": 2198,
-    "low_user_target_success_ratio": 31,
-    "multihost_policy_failed": 31,
+    "latest_checks": 2398,
+    "low_user_target_success_ratio": 76,
+    "multihost_policy_failed": 76,
     "policy": {
-      "min_critical_target_success_ratio": 0.95,
+      "min_critical_target_success_ratio": 0.5,
       "min_user_target_success_ratio": 0.8,
-      "require_critical_targets_all_success": true
+      "require_critical_targets_all_success": false
     },
-    "with_user_targets": 90
+    "with_user_targets": 156
   },
   "output_files": {
     "ALL-ETALON.txt": {
-      "considered": 90,
+      "considered": 66,
       "limit": 10000,
-      "selected": 3
+      "selected": 9
     },
     "BLACK-ETALON.txt": {
-      "considered": 21,
+      "considered": 26,
       "limit": 5000,
-      "selected": 2
+      "selected": 3
     },
     "WHITE-CIDR-ETALON.txt": {
-      "considered": 61,
+      "considered": 26,
       "limit": 2000,
-      "selected": 1
+      "selected": 4
     },
     "WHITE-SNI-ETALON.txt": {
-      "considered": 8,
+      "considered": 14,
       "limit": 2000,
-      "selected": 0
+      "selected": 6
     }
   },
   "proxy_state_status_counts": {
-    "active": 90,
-    "dead": 840,
-    "degraded": 1268,
-    "unknown": 531
+    "active": 66,
+    "dead": 974,
+    "degraded": 1358,
+    "unknown": 553
   },
-  "selected_candidates_total_across_files": 6,
-  "selected_unique_candidates": 3,
+  "selected_candidates_total_across_files": 22,
+  "selected_unique_candidates": 13,
   "sorting": [
     "final_score DESC",
     "stability_ratio DESC NULLS LAST",
@@ -124,26 +127,26 @@
     "status_filter": "active"
   },
   "speed_quality": {
-    "connect_failed": 1472,
-    "connect_ok": 726,
-    "latest_checks": 2198,
+    "connect_failed": 1606,
+    "connect_ok": 792,
+    "latest_checks": 2398,
     "legacy_empty_speed_diagnostics": 0,
     "speed_error_code_breakdown": {
-      "speed_all_endpoints_failed": 33,
-      "speed_error_code_null": 2159,
+      "speed_all_endpoints_failed": 38,
+      "speed_error_code_null": 2354,
       "speed_unexpected_error": 6
     },
-    "speed_measured": 687,
-    "speed_new_format": 726,
+    "speed_measured": 748,
+    "speed_new_format": 792,
     "speed_semantics_breakdown": {
-      "connect_failed": 1472,
-      "diagnosed_unavailable": 39,
-      "measured": 687
+      "connect_failed": 1606,
+      "diagnosed_unavailable": 44,
+      "measured": 748
     },
-    "speed_unavailable": 39,
+    "speed_unavailable": 44,
     "speed_unavailable_by_reason": {
-      "speed_http_error": 10,
-      "speed_timeout": 23,
+      "speed_http_error": 12,
+      "speed_timeout": 26,
       "speed_unexpected_error": 6
     }
   }
